@@ -1,3 +1,45 @@
+// Advanced, production-ready input sanitization and validation utilities
+const xss = require('xss');
+const validator = require('validator');
+
+/**
+ * Sanitize a string for safe storage and display.
+ * Removes dangerous HTML, trims, and normalizes whitespace.
+ * @param {string} text
+ * @returns {string}
+ */
+function sanitizeText(text) {
+  if (typeof text !== 'string') return '';
+  // Remove dangerous HTML and scripts, normalize whitespace
+  let clean = xss(text, {
+    whiteList: {}, // Remove all tags
+    stripIgnoreTag: true,
+    stripIgnoreTagBody: ['script']
+  });
+  clean = clean.replace(/\s+/g, ' ').trim();
+  return clean;
+}
+
+/**
+ * Sanitize an array of strings.
+ * @param {any[]} arr
+ * @returns {string[]}
+ */
+function sanitizeArray(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.map(sanitizeText).filter(Boolean);
+}
+
+/**
+ * Validate a URL for safety and correctness.
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isValidUrl(url) {
+  if (typeof url !== 'string') return false;
+  // Use validator to check for valid http(s) URLs
+  return validator.isURL(url, { protocols: ['http','https'], require_protocol: true, allow_underscores: true });
+}
 const { app, BrowserWindow, BrowserView, ipcMain, nativeImage, session, globalShortcut, Menu, net, shell, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
@@ -1776,9 +1818,13 @@ ipcMain.handle('get-custom-personas', () => {
 });
 
 ipcMain.handle('save-custom-persona', (event, persona) => {
-  // Validate
-  if (!persona.name || !persona.searches || !persona.sites) {
-    return { success: false, error: 'Oopsie! Plz fill in da name, searches, and sites to make dis persona work uwu' };
+  // Sanitize and validate
+  const name = sanitizeText(persona.name);
+  const searches = sanitizeArray(persona.searches);
+  const sites = sanitizeArray(persona.sites).filter(isValidUrl);
+
+  if (!name || searches.length === 0 || sites.length === 0) {
+    return { success: false, error: 'Please provide a name, at least one search term, and at least one valid site URL.' };
   }
 
   // Generate ID if new
@@ -1786,16 +1832,25 @@ ipcMain.handle('save-custom-persona', (event, persona) => {
     persona.id = Date.now().toString();
   }
 
+  // Save sanitized persona
+  const sanitizedPersona = {
+    id: persona.id,
+    name,
+    description: sanitizeText(persona.description || ''),
+    searches,
+    sites
+  };
+
   // Check if updating existing
   const existingIndex = customPersonas.findIndex(p => p.id === persona.id);
   if (existingIndex >= 0) {
-    customPersonas[existingIndex] = persona;
+    customPersonas[existingIndex] = sanitizedPersona;
   } else {
-    customPersonas.push(persona);
+    customPersonas.push(sanitizedPersona);
   }
 
   saveCustomPersonas();
-  return { success: true, persona };
+  return { success: true, persona: sanitizedPersona };
 });
 
 ipcMain.handle('delete-custom-persona', (event, personaId) => {

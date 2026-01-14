@@ -1,3 +1,22 @@
+// Advanced, production-ready input sanitization and validation utilities
+const xss = require('xss');
+const validator = require('validator');
+
+function sanitizeText(text) {
+  if (typeof text !== 'string') return '';
+  let clean = xss(text, {
+    whiteList: {},
+    stripIgnoreTag: true,
+    stripIgnoreTagBody: ['script']
+  });
+  clean = clean.replace(/\s+/g, ' ').trim();
+  return clean;
+}
+
+function isValidUrl(url) {
+  if (typeof url !== 'string') return false;
+  return validator.isURL(url, { protocols: ['http','https'], require_protocol: true, allow_underscores: true });
+}
 const { app, ipcMain } = require('electron');
 const fs = require('fs');
 const path = require('path');
@@ -30,12 +49,18 @@ function getAll() {
 }
 
 function add(bookmark) {
-  const exists = bookmarks.find(b => b.url === bookmark.url);
+  // Sanitize and validate
+  const url = sanitizeText(bookmark.url);
+  const title = sanitizeText(bookmark.title || bookmark.url);
+  if (!isValidUrl(url)) {
+    return false;
+  }
+  const exists = bookmarks.find(b => b.url === url);
   if (!exists) {
     bookmarks.unshift({
       id: Date.now().toString(),
-      url: bookmark.url,
-      title: bookmark.title || bookmark.url,
+      url,
+      title,
       favicon: bookmark.favicon || '',
       createdAt: Date.now()
     });
@@ -52,9 +77,11 @@ function remove(url) {
 
 function update(oldUrl, newUrl, title) {
   const bookmark = bookmarks.find(b => b.url === oldUrl);
-  if (bookmark) {
-    bookmark.url = newUrl;
-    bookmark.title = title;
+  const sanitizedNewUrl = sanitizeText(newUrl);
+  const sanitizedTitle = sanitizeText(title);
+  if (bookmark && isValidUrl(sanitizedNewUrl)) {
+    bookmark.url = sanitizedNewUrl;
+    bookmark.title = sanitizedTitle;
     save();
     return true;
   }
