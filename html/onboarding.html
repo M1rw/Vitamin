@@ -5,25 +5,53 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';">
   <title>Welcome to Vitamin</title>
   <script>
-    // Error fallback - catch any issues and display them
+    // Error fallback - catch any issues and display them using DOM APIs
+    function renderFatal(message, lineNumber, actionLabel) {
+      try {
+        document.body.innerHTML = '';
+        const wrap = document.createElement('div');
+        wrap.style.padding = '40px';
+        wrap.style.color = '#ff6b00';
+        wrap.style.fontFamily = 'monospace';
+
+        const h2 = document.createElement('h2');
+        h2.textContent = message || 'Oops! Something went wrong';
+        wrap.appendChild(h2);
+
+        if (typeof lineNumber !== 'undefined') {
+          const p = document.createElement('p');
+          p.style.color = '#888';
+          p.textContent = 'at line ' + lineNumber;
+          wrap.appendChild(p);
+        }
+
+        const btn = document.createElement('button');
+        btn.textContent = actionLabel || 'Close';
+        btn.style.marginTop = '20px';
+        btn.style.padding = '10px 20px';
+        btn.style.background = '#ff6b00';
+        btn.style.border = 'none';
+        btn.style.color = '#fff';
+        btn.style.borderRadius = '6px';
+        btn.style.cursor = 'pointer';
+        btn.addEventListener('click', () => window.close());
+        wrap.appendChild(btn);
+
+        document.body.appendChild(wrap);
+      } catch (e) {
+        // best-effort
+      }
+    }
+
     window.onerror = function(msg, url, line, col, error) {
-      document.body.innerHTML = '<div style="padding:40px;color:#ff6b00;font-family:monospace;">' +
-        '<h2>Oops! Something went wrong</h2>' +
-        '<p style="color:#888;">Error: ' + msg + '</p>' +
-        '<p style="color:#666;">at line ' + line + '</p>' +
-        '<button onclick="window.close()" style="margin-top:20px;padding:10px 20px;background:#ff6b00;border:none;color:#fff;border-radius:6px;cursor:pointer;">Close</button>' +
-        '</div>';
+      renderFatal('Oops! Something went wrong', line, 'Close');
       return true;
     };
+
     // Check if preload bridge is available
     window.addEventListener('DOMContentLoaded', function() {
       if (!window.vitamin) {
-        document.body.innerHTML = '<div style="padding:40px;color:#ff6b00;font-family:monospace;">' +
-          '<h2>Bridge not loaded</h2>' +
-          '<p style="color:#888;">The preload script failed to initialize.</p>' +
-          '<p style="color:#666;">This may be a packaging issue on Linux.</p>' +
-          '<button onclick="window.close()" style="margin-top:20px;padding:10px 20px;background:#ff6b00;border:none;color:#fff;border-radius:6px;cursor:pointer;">Close anyway</button>' +
-          '</div>';
+        renderFatal('Bridge not loaded', undefined, 'Close anyway');
       }
     });
   </script>
@@ -243,7 +271,7 @@
   <div class="glow glow-2"></div>
   <div class="glow glow-3"></div>
 
-  <button class="skip-btn" onclick="finish()">Skip</button>
+  <button class="skip-btn" id="onboarding-skip">Skip</button>
 
   <div class="container">
     <!-- Slide 1: Welcome -->
@@ -260,7 +288,7 @@
         While billions scroll through the internet leaving digital footprints everywhere they go, you decided to take control.<br><br>
         Welcome to Vitamin.
       </div>
-      <button class="next-btn" onclick="nextSlide()">Let's begin</button>
+      <button class="next-btn">Let's begin</button>
     </div>
 
     <!-- Slide 2: Watching -->
@@ -278,7 +306,7 @@
         Brave blocks. Firefox blocks. LibreWolf blocks.<br><br>
         But Vitamin? Vitamin <span class="highlight">supplements</span>.
       </div>
-      <button class="next-btn" onclick="nextSlide()">Tell me more</button>
+      <button class="next-btn">Tell me more</button>
     </div>
 
     <!-- Slide 3: Chaos -->
@@ -296,7 +324,7 @@
         You become invisible not by disappearing—but by becoming <span class="highlight">everyone</span>.<br><br>
         Your real data drowns in a sea of noise. That's not just privacy. That's power.
       </div>
-      <button class="next-btn" onclick="nextSlide()">Show me how</button>
+      <button class="next-btn">Show me how</button>
     </div>
 
     <!-- Slide 4: Toolkit -->
@@ -330,7 +358,7 @@
           </div>
         </div>
       </div>
-      <button class="next-btn" onclick="nextSlide()">What else?</button>
+      <button class="next-btn">What else?</button>
     </div>
 
     <!-- Slide 5: Shredding -->
@@ -349,7 +377,7 @@
         Forensic tools can recover "deleted" browser data. Your history isn't gone—it's just marked as reusable space.<br><br>
         Vitamin <span class="highlight">shreds</span>. We overwrite your data with random noise before deletion. No recovery. No traces. Gone forever.
       </div>
-      <button class="next-btn" onclick="nextSlide()">Almost done</button>
+      <button class="next-btn">Almost done</button>
     </div>
 
     <!-- Slide 6: Personas -->
@@ -368,7 +396,7 @@
         Each persona has its own interests, search patterns, and browsing behavior. You could be a tech enthusiast one moment, a gardening hobbyist the next.<br><br>
         The more unpredictable you are, the less valuable your data becomes.
       </div>
-      <button class="next-btn" onclick="nextSlide()">Next</button>
+      <button class="next-btn">Next</button>
     </div>
 
     <!-- Slide 7: Support -->
@@ -384,7 +412,7 @@
         But fighting surveillance capitalism isn't free. If Vitamin has helped protect your privacy, consider supporting the project.<br><br>
         You'll find a Bitcoin address in <span class="highlight">Settings</span>. Every contribution helps keep Vitamin independent in the fight against Big Brother.
       </div>
-      <button class="next-btn" onclick="nextSlide()">Get started</button>
+      <button class="next-btn">Get started</button>
     </div>
 
     <!-- Slide 8: Ready -->
@@ -400,19 +428,19 @@
         Vitamin was built to make that impossible.<br><br>
         <span class="white">Supplement your search.</span>
       </div>
-      <button class="next-btn" onclick="finish()">Start browsing</button>
+      <button class="next-btn" id="onboarding-finish">Start browsing</button>
     </div>
 
     <!-- Dots -->
     <div class="dots">
-      <div class="dot active" onclick="goToSlide(0)"></div>
-      <div class="dot" onclick="goToSlide(1)"></div>
-      <div class="dot" onclick="goToSlide(2)"></div>
-      <div class="dot" onclick="goToSlide(3)"></div>
-      <div class="dot" onclick="goToSlide(4)"></div>
-      <div class="dot" onclick="goToSlide(5)"></div>
-      <div class="dot" onclick="goToSlide(6)"></div>
-      <div class="dot" onclick="goToSlide(7)"></div>
+      <div class="dot active" data-dot-index="0"></div>
+      <div class="dot" data-dot-index="1"></div>
+      <div class="dot" data-dot-index="2"></div>
+      <div class="dot" data-dot-index="3"></div>
+      <div class="dot" data-dot-index="4"></div>
+      <div class="dot" data-dot-index="5"></div>
+      <div class="dot" data-dot-index="6"></div>
+      <div class="dot" data-dot-index="7"></div>
     </div>
   </div>
 
@@ -466,6 +494,28 @@
       // Close the window
       window.close();
     }
+
+    // Wire up controls without inline handlers
+    document.addEventListener('DOMContentLoaded', () => {
+      const skipBtn = document.getElementById('onboarding-skip');
+      if (skipBtn) skipBtn.addEventListener('click', finish);
+
+      const finishBtn = document.getElementById('onboarding-finish');
+      if (finishBtn) finishBtn.addEventListener('click', finish);
+
+      // Next buttons
+      document.querySelectorAll('.next-btn').forEach(btn => {
+        btn.addEventListener('click', nextSlide);
+      });
+
+      // Dots
+      document.querySelectorAll('.dot').forEach(dot => {
+        const idx = dot.getAttribute('data-dot-index');
+        if (idx !== null) {
+          dot.addEventListener('click', () => goToSlide(Number(idx)));
+        }
+      });
+    });
   </script>
 </body>
 </html>

@@ -168,9 +168,11 @@ function getBlockedCount() {
 
 function registerIPC(saveSettings) {
   ipcMain.on('toggle-adblock', (event, enabled) => {
+    // Basic validation
+    if (typeof enabled !== 'boolean') return;
     const settings = getSettings();
     settings.adBlockEnabled = enabled;
-    saveSettings();
+    if (typeof saveSettings === 'function') saveSettings();
 
     if (enabled) {
       enable();

@@ -3249,7 +3249,7 @@
       <span id="poison-label">Poison</span>
     </button>
 
-    <button class="toolbar-btn" id="discord-btn" title="Join Discord" style="-webkit-app-region: no-drag;" onclick="window.vitamin.openExternal('https://discord.gg/Udt3edD4DX')">
+    <button class="toolbar-btn" id="discord-btn" title="Join Discord" style="-webkit-app-region: no-drag;">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
       </svg>
@@ -3953,17 +3953,29 @@ https://www.coindesk.com"></textarea>
         tabEl.dataset.tabId = tab.id;
         tabEl.title = tab.title || 'New Tab';
 
-        // Favicon
-        const faviconHtml = tab.favicon
-          ? `<img class="tab-favicon" src="${escapeHtml(tab.favicon)}" onerror="this.outerHTML='<div class=\\'tab-favicon-placeholder\\'></div>'">`
-          : `<div class="tab-favicon-placeholder"></div>`;
+        // Favicon container
+        if (tab.favicon) {
+          const img = document.createElement('img');
+          img.className = 'tab-favicon';
+          img.src = tab.favicon;
+          img.addEventListener('error', (e) => {
+            try {
+              const placeholder = document.createElement('div');
+              placeholder.className = 'tab-favicon-placeholder';
+              img.replaceWith(placeholder);
+            } catch (err) {}
+          });
+          tabEl.appendChild(img);
+        } else {
+          const placeholder = document.createElement('div');
+          placeholder.className = 'tab-favicon-placeholder';
+          tabEl.appendChild(placeholder);
+        }
 
-        const title = tab.title || 'New Tab';
-
-        tabEl.innerHTML = `
-          ${faviconHtml}
-          <span class="tab-title">${escapeHtml(title)}</span>
-        `;
+        const titleSpan = document.createElement('span');
+        titleSpan.className = 'tab-title';
+        titleSpan.innerHTML = escapeHtml(tab.title || 'New Tab');
+        tabEl.appendChild(titleSpan);
 
         // Click tab to switch
         tabEl.addEventListener('click', () => {
@@ -3999,7 +4011,9 @@ https://www.coindesk.com"></textarea>
       menu.style.position = 'fixed';
       menu.style.left = `${x}px`;
       menu.style.top = `${y}px`;
-      menu.style.zIndex = '10000';
+      // Very high z-index to avoid being rendered behind transformed elements
+      menu.style.zIndex = '2147483647';
+      menu.style.pointerEvents = 'auto';
 
       // Get tab data
       const tabData = window.currentTabsData ? window.currentTabsData.tabs.find(t => t.id === tabId) : null;
@@ -4513,7 +4527,7 @@ https://www.coindesk.com"></textarea>
 
     function showWhatsNew(version, notes) {
       whatsNewVersion.textContent = version;
-      whatsNewList.innerHTML = notes.map(note => `<li>${note}</li>`).join('');
+      whatsNewList.innerHTML = notes.map(note => `<li>${escapeHtml(note)}</li>`).join('');
       whatsNewModal.classList.add('open');
       window.vitamin.modalOpen(); // Hide BrowserView so modal is visible
     }
@@ -4695,26 +4709,67 @@ https://www.coindesk.com"></textarea>
         return;
       }
 
-      bookmarksList.innerHTML = bookmarks.map(b => `
-        <div class="panel-item" data-url="${escapeHtml(b.url)}" data-title="${escapeHtml(b.title)}">
-          ${b.favicon ? `<img class="panel-item-icon" src="${escapeHtml(b.favicon)}" onerror="this.className='panel-item-icon-placeholder'">` : '<div class="panel-item-icon-placeholder"></div>'}
-          <div class="panel-item-content">
-            <div class="panel-item-title">${escapeHtml(b.title)}</div>
-            <div class="panel-item-subtitle">${escapeHtml(b.url)}</div>
-          </div>
-          <button class="panel-item-edit" data-url="${escapeHtml(b.url)}" data-title="${escapeHtml(b.title)}" title="Edit">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-            </svg>
-          </button>
-          <button class="panel-item-remove" data-url="${escapeHtml(b.url)}" title="Remove">
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      `).join('');
+      // Build DOM nodes for bookmarks to avoid inline event handlers
+      bookmarksList.innerHTML = '';
+      bookmarks.forEach(b => {
+        const item = document.createElement('div');
+        item.className = 'panel-item';
+        item.dataset.url = b.url;
+        item.dataset.title = b.title || '';
+
+        if (b.favicon) {
+          const img = document.createElement('img');
+          img.className = 'panel-item-icon';
+          img.src = b.favicon;
+          img.addEventListener('error', () => {
+            img.className = 'panel-item-icon-placeholder';
+          });
+          item.appendChild(img);
+        } else {
+          const ph = document.createElement('div');
+          ph.className = 'panel-item-icon-placeholder';
+          item.appendChild(ph);
+        }
+
+        const content = document.createElement('div');
+        content.className = 'panel-item-content';
+
+        const titleEl = document.createElement('div');
+        titleEl.className = 'panel-item-title';
+        titleEl.innerHTML = escapeHtml(b.title || '');
+        content.appendChild(titleEl);
+
+        const sub = document.createElement('div');
+        sub.className = 'panel-item-subtitle';
+        sub.innerHTML = escapeHtml(b.url);
+        content.appendChild(sub);
+
+        item.appendChild(content);
+
+        const editBtn = document.createElement('button');
+        editBtn.className = 'panel-item-edit';
+        editBtn.title = 'Edit';
+        editBtn.dataset.url = b.url;
+        editBtn.dataset.title = b.title || '';
+        editBtn.innerHTML = `
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+          </svg>`;
+        item.appendChild(editBtn);
+
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'panel-item-remove';
+        removeBtn.title = 'Remove';
+        removeBtn.dataset.url = b.url;
+        removeBtn.innerHTML = `
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>`;
+        item.appendChild(removeBtn);
+
+        bookmarksList.appendChild(item);
+      });
 
       bookmarksList.querySelectorAll('.panel-item').forEach(item => {
         item.addEventListener('click', (e) => {
@@ -4802,6 +4857,69 @@ https://www.coindesk.com"></textarea>
 
       modal.addEventListener('click', (e) => {
         if (e.target === modal) closeModal();
+      });
+    }
+
+    // Permission prompt modal (shows when a site requests a permission)
+    function showPermissionPrompt({ requestId, site, permission, url }) {
+      const modal = document.createElement('div');
+      modal.className = 'permission-prompt-overlay';
+      modal.innerHTML = `
+        <div class="permission-prompt-modal">
+          <div class="permission-prompt-header">Permission Request</div>
+          <div class="permission-prompt-body">${escapeHtml(site)} wants to access <strong>${escapeHtml(permission)}</strong>.</div>
+          <div class="permission-prompt-url">${escapeHtml(url || '')}</div>
+          <div class="permission-prompt-actions">
+            <label><input type="checkbox" id="permission-remember"> Remember my choice</label>
+            <div style="flex:1"></div>
+            <button class="permission-deny">Deny</button>
+            <button class="permission-allow">Allow</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+
+      // Ensure modal is visible above BrowserView
+      window.vitamin.modalOpen();
+
+      function closeModal() {
+        try { modal.remove(); } catch (e) {}
+        window.vitamin.modalClose();
+      }
+
+      modal.querySelector('.permission-deny').addEventListener('click', async () => {
+        const remember = !!modal.querySelector('#permission-remember').checked;
+        await window.vitamin.respondPermissionRequest(requestId, 'deny', remember);
+        closeModal();
+      });
+
+      modal.querySelector('.permission-allow').addEventListener('click', async () => {
+        const remember = !!modal.querySelector('#permission-remember').checked;
+        await window.vitamin.respondPermissionRequest(requestId, 'allow', remember);
+        closeModal();
+      });
+
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+          // treat backdrop click as deny without remembering
+          window.vitamin.respondPermissionRequest(requestId, 'deny', false).catch(() => {});
+          closeModal();
+        }
+      });
+    }
+
+    // Wire renderer to permission requests from main
+    if (window.vitamin && typeof window.vitamin.onPermissionRequested === 'function') {
+      window.vitamin.onPermissionRequested((data) => {
+        try { showPermissionPrompt(data); } catch (e) { /* non-fatal */ }
+      });
+    }
+
+    // External links: attach listeners instead of inline handlers
+    const discordBtn = document.getElementById('discord-btn');
+    if (discordBtn) {
+      discordBtn.addEventListener('click', () => {
+        try { window.vitamin.openExternal('https://discord.gg/Udt3edD4DX'); } catch (e) { /* ignore */ }
       });
     }
 
@@ -5062,28 +5180,71 @@ https://www.coindesk.com"></textarea>
         grouped[domain].push(c);
       });
 
-      cookiesList.innerHTML = Object.entries(grouped).map(([domain, domainCookies]) => `
-        <div class="cookie-domain" data-domain="${escapeHtml(domain)}">
-          <div class="cookie-domain-header">
-            <img class="panel-item-icon" src="https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32" onerror="this.className='panel-item-icon-placeholder'">
-            <div class="panel-item-content">
-              <div class="panel-item-title">${escapeHtml(domain)}</div>
-              <div class="panel-item-subtitle">${domainCookies.length} cookie${domainCookies.length > 1 ? 's' : ''}</div>
-            </div>
-            <svg class="cookie-expand-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="6 9 12 15 18 9"/>
-            </svg>
-          </div>
-          <div class="cookie-details">
-            ${domainCookies.map(c => `
-              <div class="cookie-item">
-                <div class="cookie-name">${escapeHtml(c.name)}</div>
-                <div class="cookie-value">${escapeHtml(c.value.slice(0, 50))}${c.value.length > 50 ? '...' : ''}</div>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-      `).join('');
+      // Build DOM for cookies list to avoid inline handlers
+      cookiesList.innerHTML = '';
+      Object.entries(grouped).forEach(([domain, domainCookies]) => {
+        const domainEl = document.createElement('div');
+        domainEl.className = 'cookie-domain';
+        domainEl.dataset.domain = domain;
+
+        const header = document.createElement('div');
+        header.className = 'cookie-domain-header';
+
+        const img = document.createElement('img');
+        img.className = 'panel-item-icon';
+        img.src = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32`;
+        img.addEventListener('error', () => {
+          try { img.className = 'panel-item-icon-placeholder'; } catch (e) {}
+        });
+        header.appendChild(img);
+
+        const content = document.createElement('div');
+        content.className = 'panel-item-content';
+        const title = document.createElement('div');
+        title.className = 'panel-item-title';
+        title.innerHTML = escapeHtml(domain);
+        const subtitle = document.createElement('div');
+        subtitle.className = 'panel-item-subtitle';
+        subtitle.textContent = `${domainCookies.length} cookie${domainCookies.length > 1 ? 's' : ''}`;
+        content.appendChild(title);
+        content.appendChild(subtitle);
+        header.appendChild(content);
+
+        const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        svg.setAttribute('class', 'cookie-expand-icon');
+        svg.setAttribute('width', '12');
+        svg.setAttribute('height', '12');
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        poly.setAttribute('points', '6 9 12 15 18 9');
+        svg.appendChild(poly);
+        header.appendChild(svg);
+
+        domainEl.appendChild(header);
+
+        const details = document.createElement('div');
+        details.className = 'cookie-details';
+        domainCookies.forEach(c => {
+          const ci = document.createElement('div');
+          ci.className = 'cookie-item';
+          const nameEl = document.createElement('div');
+          nameEl.className = 'cookie-name';
+          nameEl.innerHTML = escapeHtml(c.name);
+          const valueEl = document.createElement('div');
+          valueEl.className = 'cookie-value';
+          const val = (c.value || '').slice(0, 50);
+          valueEl.textContent = val + ( (c.value && c.value.length > 50) ? '...' : '');
+          ci.appendChild(nameEl);
+          ci.appendChild(valueEl);
+          details.appendChild(ci);
+        });
+
+        domainEl.appendChild(details);
+        cookiesList.appendChild(domainEl);
+      });
 
       // Toggle expansion
       cookiesList.querySelectorAll('.cookie-domain-header').forEach(header => {

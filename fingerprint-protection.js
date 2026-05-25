@@ -505,46 +505,39 @@
     // Silently fail - don't break the page
   }
 
-  // Spoof timezone to common values
+  // Spoof timezone and Intl settings using a consistent mapping
   try {
-    const commonTimezones = [
-      -480, // UTC-8 (PST)
-      -420, // UTC-7 (PDT)
-      -300, // UTC-5 (EST)
-      -240, // UTC-4 (EDT)
-      0,    // UTC
-      60,   // UTC+1 (CET)
-      120,  // UTC+2 (CEST)
-      330,  // UTC+5:30 (IST)
-      480,  // UTC+8 (CST)
-      540   // UTC+9 (JST)
+    const tzOptions = [
+      { offset: -480, zone: 'America/Los_Angeles', locale: 'en-US' }, // PST
+      { offset: -420, zone: 'America/Denver', locale: 'en-US' }, // MDT
+      { offset: -300, zone: 'America/New_York', locale: 'en-US' }, // EST
+      { offset: -240, zone: 'America/Halifax', locale: 'en-GB' }, // EDT-ish
+      { offset: 0,    zone: 'UTC', locale: 'en-GB' },
+      { offset: 60,   zone: 'Europe/Paris', locale: 'fr-FR' },
+      { offset: 120,  zone: 'Europe/Kyiv', locale: 'de-DE' },
+      { offset: 330,  zone: 'Asia/Kolkata', locale: 'en-GB' },
+      { offset: 480,  zone: 'Asia/Shanghai', locale: 'zh-CN' },
+      { offset: 540,  zone: 'Asia/Tokyo', locale: 'ja-JP' }
     ];
-    const spoofedTimezone = commonTimezones[sessionSeed % commonTimezones.length];
-    
-    Date.prototype.getTimezoneOffset = function() { 
-      return spoofedTimezone; 
-    };
-  } catch (e) {
-    // Silently fail - don't break the page
-  }
+    const picked = tzOptions[sessionSeed % tzOptions.length];
 
-  // Override Intl API to prevent locale-based fingerprinting
-  try {
-    if (typeof Intl !== 'undefined') {
-      // Spoof DateTimeFormat resolved options
-      if (typeof Intl.DateTimeFormat !== 'undefined') {
-        const originalResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
-        Intl.DateTimeFormat.prototype.resolvedOptions = function() {
-          try {
-            const options = originalResolvedOptions.call(this);
-            options.locale = ['en-US', 'en-GB', 'fr-FR', 'de-DE', 'es-ES'][sessionSeed % 5];
-            options.timeZone = ['America/New_York', 'Europe/London', 'Europe/Paris', 'Asia/Tokyo', 'Asia/Shanghai'][sessionSeed % 5];
-            return options;
-          } catch (e) {
-            return originalResolvedOptions.call(this);
-          }
-        };
-      }
+    Date.prototype.getTimezoneOffset = function() {
+      return picked.offset;
+    };
+
+    // Override Intl API to prevent locale-based fingerprinting (consistent)
+    if (typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat !== 'undefined') {
+      const originalResolvedOptions = Intl.DateTimeFormat.prototype.resolvedOptions;
+      Intl.DateTimeFormat.prototype.resolvedOptions = function() {
+        try {
+          const options = originalResolvedOptions.call(this);
+          options.locale = picked.locale || options.locale;
+          options.timeZone = picked.zone || options.timeZone;
+          return options;
+        } catch (e) {
+          return originalResolvedOptions.call(this);
+        }
+      };
     }
   } catch (e) {
     // Silently fail - don't break the page

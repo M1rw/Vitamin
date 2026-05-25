@@ -1,3 +1,215 @@
+const { app, BrowserWindow, session, ipcMain, Menu, nativeTheme, BrowserView, nativeImage } = require('electron');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
+const child_process = require('child_process');
+
+// Per-site permissions and anti-fingerprinting initialized below
+// ===== Per-Site Permissions Store =====
+const sitePermissions = {};
+const PERMISSION_TYPES = ['geolocation', 'notifications', 'camera', 'microphone', 'midi', 'clipboard-read', 'clipboard-write'];
+
+function getSiteFromURL(url) {
+  try {
+    const u = new URL(url);
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+
+function getPermissionForSite(site, permission) {
+  if (sitePermissions[site] && sitePermissions[site][permission]) {
+    return sitePermissions[site][permission];
+  }
+  return 'default'; // default: deny unless explicitly allowed
+}
+
+function setPermissionForSite(site, permission, value) {
+  if (!sitePermissions[site]) sitePermissions[site] = {};
+  sitePermissions[site][permission] = value;
+  saveSitePermissions();
+}
+
+function saveSitePermissions() {
+  try {
+    const p = path.join(app.getPath('userData'), 'site-permissions.json');
+    fs.writeFileSync(p, JSON.stringify(sitePermissions, null, 2));
+  } catch (e) {
+    console.error('Failed to save site permissions:', e);
+  }
+}
+
+function loadSitePermissions() {
+  try {
+    const p = path.join(app.getPath('userData'), 'site-permissions.json');
+    if (fs.existsSync(p)) {
+      const data = fs.readFileSync(p, 'utf8');
+      Object.assign(sitePermissions, JSON.parse(data));
+    }
+  } catch (e) {
+    // Ignore if file doesn't exist or is corrupt
+  }
+}
+
+loadSitePermissions();
+// Track pending permission prompts so renderer can reply later
+const pendingPermissionRequests = new Map();
+
+// Helper: validate external URL schemes we allow
+function isValidExternalUrl(u) {
+  try {
+    const parsed = new URL(u);
+    const allowed = ['http:', 'https:', 'mailto:', 'tel:'];
+    return allowed.includes(parsed.protocol);
+  } catch (e) {
+    return false;
+  }
+}
+
+// Helper: check savePath belongs to a tracked download
+function isPathInDownloads(savePath) {
+  if (!savePath) return false;
+  try {
+    for (const d of downloads) {
+      if (!d) continue;
+      if (d.savePath && path.resolve(d.savePath) === path.resolve(savePath)) return true;
+    }
+  } catch (e) {
+    return false;
+  }
+  return false;
+}
+
+// ===== Advanced Anti-Fingerprinting Injection =====
+const fingerprintProtectionScript = (() => {
+  try {
+    const fpPath = path.join(__dirname, 'fingerprint-protection.js');
+    if (require('fs').existsSync(fpPath)) {
+      return require('fs').readFileSync(fpPath, 'utf8');
+    }
+  } catch (e) {
+    console.error('Failed to load fingerprint protection script:', e.message);
+  }
+  return '';
+})();
+
+// Inject protection into all created webContents (covers BrowserViews, BrowserWindows, webviews)
+app.on('web-contents-created', (event, contents) => {
+  contents.on('dom-ready', () => {
+    try {
+      const url = contents.getURL();
+      if (!url || url.startsWith('file://')) return; // Skip internal pages
+      if (settings && settings.blockFingerprinting && fingerprintProtectionScript) {
+        if (typeof contents.executeJavaScriptInIsolatedWorld === 'function') {
+          try {
+            contents.executeJavaScriptInIsolatedWorld(1, [{ code: fingerprintProtectionScript }]);
+          } catch (e) {
+            // Fallback
+            contents.executeJavaScript(fingerprintProtectionScript).catch(err => {
+              console.error('[FINGERPRINT] Injection failed (fallback):', err && err.message ? err.message : err);
+            });
+          }
+        } else {
+          contents.executeJavaScript(fingerprintProtectionScript).catch(err => {
+            console.error('[FINGERPRINT] Injection failed:', err && err.message ? err.message : err);
+          });
+        }
+      }
+    } catch (e) {
+      // Non-fatal
+    }
+  });
+});
+// ===== Advanced Per-Site Permission Handler =====
+session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+  if (!PERMISSION_TYPES.includes(permission)) {
+    callback(false);
+    return;
+  }
+  const url = (details && details.requestingUrl) || webContents.getURL();
+  const site = getSiteFromURL(url);
+  if (!site) {
+    callback(false);
+    return;
+  }
+  const value = getPermissionForSite(site, permission);
+  if (value === 'allow') {
+    callback(true);
+    return;
+  }
+  if (value === 'deny') {
+    callback(false);
+    return;
+  }
+
+  // Not decided: queue a prompt for the renderer. Deny by default until user responds.
+  try {
+    callback(false);
+  } catch (e) {
+    // Defensive: ensure callback is invoked in all circumstances
+  }
+
+  const requestId = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  pendingPermissionRequests.set(requestId, { callback, webContents, permission, site, url });
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('permission-requested', { requestId, site, permission, url });
+  } else {
+    // No UI available — remove queued request
+    pendingPermissionRequests.delete(requestId);
+  }
+});
+// ===== IPC for Per-Site Permissions =====
+ipcMain.handle('get-site-permissions', (event, site) => {
+  return sitePermissions[site] || {};
+});
+
+ipcMain.handle('set-site-permission', (event, { site, permission, value }) => {
+  if (!PERMISSION_TYPES.includes(permission)) return { success: false };
+  setPermissionForSite(site, permission, value);
+  return { success: true };
+});
+
+// Renderer responds to a permission prompt with decision and optional persistence
+ipcMain.handle('respond-permission-request', (event, { requestId, decision, remember }) => {
+  const req = pendingPermissionRequests.get(requestId);
+  if (!req) return { success: false, error: 'request-not-found' };
+  try {
+    const allow = decision === 'allow';
+    // Persist user's choice if requested
+    if (remember) {
+      setPermissionForSite(req.site, req.permission, allow ? 'allow' : 'deny');
+    }
+    try {
+      req.callback(allow);
+    } catch (e) {
+      // callback may throw if webContents disposed — ignore
+    }
+    pendingPermissionRequests.delete(requestId);
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e && e.message ? e.message : String(e) };
+  }
+});
+
+// Save session and site permissions when main window is about to close
+app.on('before-quit', () => {
+  // Don't save session if nuke was triggered
+  if (settings.restoreSession && !nukeInProgress) {
+    saveSession();
+  }
+
+  // Save site permissions
+  saveSitePermissions();
+
+  // Destroy onboarding window if it exists
+  if (onboardingWindow && !onboardingWindow.isDestroyed()) {
+    onboardingWindow.destroy();
+    onboardingWindow = null;
+  }
+});
 // Advanced, production-ready input sanitization and validation utilities
 const xss = require('xss');
 const validator = require('validator');
@@ -8,73 +220,16 @@ const validator = require('validator');
  * @param {string} text
  * @returns {string}
  */
-function sanitizeText(text) {
-  if (typeof text !== 'string') return '';
-  // Remove dangerous HTML and scripts, normalize whitespace
-  let clean = xss(text, {
-    whiteList: {}, // Remove all tags
-    stripIgnoreTag: true,
-    stripIgnoreTagBody: ['script']
-  });
-  clean = clean.replace(/\s+/g, ' ').trim();
-  return clean;
-}
-
-/**
- * Sanitize an array of strings.
- * @param {any[]} arr
- * @returns {string[]}
- */
-function sanitizeArray(arr) {
-  if (!Array.isArray(arr)) return [];
-  return arr.map(sanitizeText).filter(Boolean);
-}
-
-/**
- * Validate a URL for safety and correctness.
- * @param {string} url
- * @returns {boolean}
- */
-function isValidUrl(url) {
-  if (typeof url !== 'string') return false;
-  // Use validator to check for valid http(s) URLs
-  return validator.isURL(url, { protocols: ['http','https'], require_protocol: true, allow_underscores: true });
-}
-const { app, BrowserWindow, BrowserView, ipcMain, nativeImage, session, globalShortcut, Menu, net, shell, nativeTheme } = require('electron');
-const path = require('path');
-const fs = require('fs');
-const { frequencies, getSearchTerms, getSites, getDelay, getPersonaList, getFrequencyList } = require('./poisonData');
-const fetch = require('cross-fetch');
-const os = require('os');
-const historyModule = require('./history');
-const bookmarksModule = require('./bookmarks');
-const adblockModule = require('./adblock');
-
-// Load fingerprint protection script
-let fingerprintProtectionScript = '';
-try {
-  fingerprintProtectionScript = fs.readFileSync(path.join(__dirname, 'fingerprint-protection.js'), 'utf8');
-  console.log('Fingerprint protection script loaded successfully');
-} catch (e) {
-  console.error('Failed to load fingerprint protection script:', e.message);
-}
-
 // Linux GPU and display compatibility
 // These must be set before app is ready
 if (process.platform === 'linux') {
-  // Disable GPU compositing to prevent blank windows on some drivers
   app.commandLine.appendSwitch('disable-gpu-compositing');
-  // Enable Ozone platform for better Wayland/X11 compatibility
   app.commandLine.appendSwitch('enable-features', 'UseOzonePlatform');
   app.commandLine.appendSwitch('ozone-platform-hint', 'auto');
-  // Disable GPU sandbox which can fail on some distros
   app.commandLine.appendSwitch('disable-gpu-sandbox');
-  // Use software rendering as fallback if GPU fails
   app.commandLine.appendSwitch('disable-software-rasterizer');
 } else {
-  // Disable GPU acceleration on all platforms to reduce GPU errors
   app.commandLine.appendSwitch('disable-gpu');
-  // Disable additional GPU flags that cause conflicts
   app.commandLine.appendSwitch('disable-gpu-compositing');
   app.commandLine.appendSwitch('disable-gpu-sandbox');
   app.commandLine.appendSwitch('disable-software-rasterizer');
@@ -578,11 +733,37 @@ function clearBrowsingData() {
 let mainWindow;
 let poisonViews = []; // Hidden views for poisoning
 
+
+// Profile/Container management
+let profiles = [
+  { id: 'default', name: 'Default', partition: 'persist:default' }
+];
+let activeProfileId = 'default';
+
 // Tab management
-let tabs = []; // Array of { id, title, url }
+let tabs = []; // Array of { id, title, url, profileId }
 let tabViews = new Map(); // Map<tabId, BrowserView>
 let activeTabId = null;
 let nextTabId = 1;
+
+function getProfileById(profileId) {
+  return profiles.find(p => p.id === profileId) || profiles[0];
+}
+
+function createProfile(name) {
+  const id = `profile_${Date.now()}`;
+  const partition = `persist:${id}`;
+  const profile = { id, name, partition };
+  profiles.push(profile);
+  return profile;
+}
+
+function switchProfile(profileId) {
+  if (getProfileById(profileId)) {
+    activeProfileId = profileId;
+    // Optionally, close all tabs or prompt user
+  }
+}
 
 function createWindow() {
   // Get screen dimensions to center the window
@@ -661,477 +842,9 @@ function createWindow() {
   // Create first tab if no session restored
   if (!restoredSession) {
     // Small delay to ensure settings are fully loaded
-    setTimeout(() => {
-      createTab();
-    }, 100);
   }
-
-  // Set up keyboard shortcuts via menu
-  const template = [
-    {
-      label: 'File',
-      submenu: [
-        {
-          label: 'New Tab',
-          accelerator: 'CmdOrCtrl+T',
-          click: () => createTab()
-        },
-        {
-          label: 'Close Tab',
-          accelerator: 'CmdOrCtrl+W',
-          click: () => {
-            if (activeTabId) closeTab(activeTabId);
-          }
-        },
-        { type: 'separator' },
-        { role: 'quit' }
-      ]
-    },
-    {
-      label: 'Edit',
-      submenu: [
-        { role: 'undo' },
-        { role: 'redo' },
-        { type: 'separator' },
-        { role: 'cut' },
-        { role: 'copy' },
-        { role: 'paste' },
-        { role: 'selectAll' },
-        { type: 'separator' },
-        {
-          label: 'Find',
-          accelerator: 'CmdOrCtrl+F',
-          click: () => {
-            if (mainWindow) {
-              mainWindow.webContents.send('toggle-find-bar');
-            }
-          }
-        }
-      ]
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload' },
-        { role: 'forceReload' },
-        { type: 'separator' },
-        { role: 'zoomIn' },
-        { role: 'zoomOut' },
-        { role: 'resetZoom' },
-        { type: 'separator' },
-        { role: 'togglefullscreen' }
-      ]
-    },
-    {
-      label: 'Window',
-      submenu: [
-        {
-          label: 'Next Tab',
-          accelerator: 'CmdOrCtrl+Tab',
-          click: () => {
-            if (tabs.length > 1) {
-              const currentIndex = tabs.findIndex(t => t.id === activeTabId);
-              const nextIndex = (currentIndex + 1) % tabs.length;
-              switchToTab(tabs[nextIndex].id);
-            }
-          }
-        },
-        {
-          label: 'Previous Tab',
-          accelerator: 'CmdOrCtrl+Shift+Tab',
-          click: () => {
-            if (tabs.length > 1) {
-              const currentIndex = tabs.findIndex(t => t.id === activeTabId);
-              const prevIndex = (currentIndex - 1 + tabs.length) % tabs.length;
-              switchToTab(tabs[prevIndex].id);
-            }
-          }
-        },
-        { type: 'separator' },
-        { role: 'minimize' },
-        { role: 'zoom' }
-      ]
-    }
-  ];
-
-  const menu = Menu.buildFromTemplate(template);
-  Menu.setApplicationMenu(menu);
 }
 
-// Track panel state for resize handling
-let leftPanelOpen = false;
-let rightPanelOpen = false;
-let dashboardVisible = false;
-
-function updateActiveTabBounds() {
-  if (!mainWindow || !activeTabId) return;
-  const view = tabViews.get(activeTabId);
-  if (!view) return;
-
-  const bounds = mainWindow.getBounds();
-
-  // Adjust for open panels
-  let x = 0;
-  let width = bounds.width;
-  // Default: just toolbar (52px), with dashboard: 105px
-  let y = dashboardVisible ? 105 : 52;
-
-  if (leftPanelOpen) {
-    x = 320;
-    width = bounds.width - 320;
-  } else if (rightPanelOpen) {
-    width = bounds.width - 320;
-  }
-
-  // Ensure the view covers the entire available area exactly
-  view.setBounds({
-    x: x,
-    y: y,
-    width: width,
-    height: bounds.height - y
-  });
-}
-
-function createTab(url = null) {
-  const tabId = nextTabId++;
-  const view = new BrowserView({
-    webPreferences: {
-      preload: path.join(__dirname, 'preload-start.js'),
-      nodeIntegration: false,
-      contextIsolation: true,
-      session: session.defaultSession  // Ensure we use the default session where request handlers are registered
-    },
-    backgroundColor: '#0a0a0a'
-  });
-
-  // Store tab data
-  const tab = {
-    id: tabId,
-    title: 'New Tab',
-    url: '',
-    favicon: ''
-  };
-  tabs.push(tab);
-  tabViews.set(tabId, view);
-
-  // Apply performance mode if enabled
-  if (settings.performanceMode) {
-    applyPerformanceModeToView(view, true);
-  }
-
-  // Set view bounds immediately to prevent flash
-  if (mainWindow) {
-    const bounds = mainWindow.getBounds();
-    // Default: just toolbar (52px)
-    let y = 52;
-    let x = 0;
-    let width = bounds.width;
-    let height = bounds.height - y;
-
-    view.setBounds({ x, y, width, height });
-  }
-
-  // Intercept navigation to Palantir URLs BEFORE they happen
-  let handlingPalantir = false;
-  view.webContents.on('will-navigate', (event, url) => {
-    // Skip internal file:// URLs to avoid loops
-    if (url.startsWith('file://')) return;
-    // Prevent re-entry while handling
-    if (handlingPalantir) return;
-
-    if (url.includes('palantir.com')) {
-      console.log('[PALANTIR] Blocking navigation to Palantir URL:', url);
-      handlingPalantir = true;
-      event.preventDefault();
-      const palantirInfo = encodeURIComponent(JSON.stringify({ url: url }));
-      view.webContents.loadFile('html/palantir.html', { hash: palantirInfo });
-      // Reset flag after a short delay
-      setTimeout(() => { handlingPalantir = false; }, 500);
-    }
-  });
-
-
-  // Set up navigation listeners for this tab
-  view.webContents.on('did-navigate', (event, url) => {
-    tab.url = url;
-    const displayUrl = url.startsWith('file://') ? '' : url;
-
-    // Update title from page (getTitle returns string, not promise)
-    const title = view.webContents.getTitle();
-    tab.title = title || 'New Tab';
-    sendTabsUpdate();
-
-    // Add to history
-    historyModule.add(url, tab.title);
-
-    // If this is the active tab, update URL bar
-    if (tabId === activeTabId) {
-      mainWindow.webContents.send('url-changed', displayUrl);
-    }
-
-    // Apply theme only to internal pages after navigation
-    const theme = settings.theme;
-    const isInternalPage = url.startsWith('file://');
-    if (isInternalPage) {
-      view.webContents.executeJavaScript(getThemeInjectionScript(theme));
-    } else if (settings.blockFingerprinting && fingerprintProtectionScript) {
-      // Inject fingerprint protection for external pages
-      console.log(`[FINGERPRINT] Injecting protection script for tab ${tabId} URL: ${url}`);
-      view.webContents.executeJavaScript(fingerprintProtectionScript).then(() => {
-        console.log(`[FINGERPRINT] Successfully injected protection script for tab ${tabId}`);
-      }).catch((err) => {
-        console.error(`[FINGERPRINT] Failed to inject protection script for tab ${tabId}:`, err.message);
-      });
-    }
-  });
-
-  // Also inject fingerprint protection on dom-ready for external pages
-  view.webContents.on('dom-ready', (event) => {
-    const url = view.webContents.getURL();
-    if (!url.startsWith('file://') && settings.blockFingerprinting && fingerprintProtectionScript) {
-      console.log(`[FINGERPRINT] Injecting protection script on dom-ready for tab ${tabId} URL: ${url}`);
-      view.webContents.executeJavaScript(fingerprintProtectionScript).then(() => {
-        console.log(`[FINGERPRINT] Successfully injected protection script on dom-ready for tab ${tabId}`);
-      }).catch((err) => {
-        console.error(`[FINGERPRINT] Failed to inject protection script on dom-ready for tab ${tabId}:`, err.message);
-      });
-    }
-  });
-
-  view.webContents.on('did-navigate-in-page', (event, url) => {
-    tab.url = url;
-    const displayUrl = url.startsWith('file://') ? '' : url;
-    if (tabId === activeTabId) {
-      mainWindow.webContents.send('url-changed', displayUrl);
-    }
-
-    // Apply theme only to internal pages
-    const theme = settings.theme;
-    const isInternalPage = url.startsWith('file://');
-    if (isInternalPage) {
-      view.webContents.executeJavaScript(getThemeInjectionScript(theme));
-    }
-  });
-
-  view.webContents.on('page-title-updated', (event, title) => {
-    tab.title = title || 'New Tab';
-    sendTabsUpdate();
-  });
-
-  view.webContents.on('page-favicon-updated', (event, favicons) => {
-    if (favicons && favicons.length > 0) {
-      const faviconUrl = favicons[0];
-      tab.favicon = faviconUrl;
-
-      // Download and cache the favicon
-      downloadAndCacheFavicon(faviconUrl).catch(err => {
-        console.error(`Failed to download favicon ${faviconUrl}:`, err.message);
-      });
-
-      sendTabsUpdate();
-    }
-  });
-
-  // Loading progress events
-  view.webContents.on('did-start-loading', () => {
-    if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('loading-start');
-    }
-  });
-
-  view.webContents.on('did-stop-loading', () => {
-    if (tabId === activeTabId && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('loading-stop');
-    }
-  });
-
-  // Handle page load errors - show cute kitty error page
-  view.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    // Ignore aborted loads (user navigated away) and cancelled loads
-    if (errorCode === -3 || errorCode === -1) return;
-    // Don't show error for file:// URLs (internal pages)
-    if (validatedURL && validatedURL.startsWith('file://')) return;
-
-    console.log(`Page load failed: ${errorDescription} (${errorCode}) - ${validatedURL} (main frame: ${isMainFrame})`);
-
-    // Special handling for connection closed errors (-100)
-    if (errorCode === -100) {
-      console.log(`Connection closed error for ${validatedURL}. This could be due to:`, {
-        httpsOnly: settings.httpsOnly,
-        blockThirdPartyCookies: settings.blockThirdPartyCookies,
-        userAgent: view.webContents.getUserAgent()
-      });
-    }
-
-    // Special handling for blocked by client errors (-20 or -354)
-    // -20 = ERR_BLOCKED_BY_CLIENT (ad blocker)
-    // -354 = ERR_CONTENT_DECODING_FAILED (can also be caused by aggressive blocking)
-    // Only show blocked page for main frame errors
-    if ((errorCode === -20 || errorCode === -354) && isMainFrame) {
-      console.log(`Page blocked by client: ${validatedURL}`);
-      // Show special blocked page with "Proceed Anyway" option
-      const blockedInfo = encodeURIComponent(JSON.stringify({
-        url: validatedURL,
-        reason: 'blocked-by-adblocker',
-        blockedCount: blockedCount
-      }));
-      // Use loadURL with file:// protocol to ensure correct path resolution
-      const blockedPageUrl = `file://${__dirname}/html/blocked.html#${blockedInfo}`;
-      view.webContents.loadURL(blockedPageUrl);
-      return;
-    }
-
-    // Pass error info via URL hash (only for main frame errors)
-    if (isMainFrame) {
-      const errorInfo = encodeURIComponent(JSON.stringify({
-        code: errorCode,
-        description: errorDescription,
-        url: validatedURL
-      }));
-      // Use loadURL with file:// protocol to ensure correct path resolution
-      const errorPageUrl = `file://${__dirname}/html/error.html#${errorInfo}`;
-      view.webContents.loadURL(errorPageUrl);
-    }
-  });
-
-  // Find in page results
-  view.webContents.on('found-in-page', (event, result) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('found-in-page', result);
-    }
-  });
-
-  // Right-click context menu
-  view.webContents.on('context-menu', (event, params) => {
-    const menuItems = [];
-
-    // Link actions
-    if (params.linkURL) {
-      menuItems.push({
-        label: 'Open Link in New Tab',
-        click: () => createTab(params.linkURL)
-      });
-      menuItems.push({
-        label: 'Copy Link',
-        click: () => require('electron').clipboard.writeText(params.linkURL)
-      });
-      menuItems.push({
-        label: 'Download Link',
-        click: () => view.webContents.downloadURL(params.linkURL)
-      });
-      menuItems.push({ type: 'separator' });
-    }
-
-    // Image actions
-    if (params.srcURL && params.mediaType === 'image') {
-      menuItems.push({
-        label: 'Save Image',
-        click: () => view.webContents.downloadURL(params.srcURL)
-      });
-      menuItems.push({
-        label: 'Copy Image URL',
-        click: () => require('electron').clipboard.writeText(params.srcURL)
-      });
-      menuItems.push({ type: 'separator' });
-    }
-
-    // Text selection
-    if (params.selectionText) {
-      menuItems.push({
-        label: 'Copy',
-        click: () => view.webContents.copy()
-      });
-      menuItems.push({
-        label: 'Search for "' + params.selectionText.slice(0, 20) + (params.selectionText.length > 20 ? '...' : '') + '"',
-        click: () => createTab('https://duckduckgo.com/?q=' + encodeURIComponent(params.selectionText))
-      });
-      menuItems.push({ type: 'separator' });
-    }
-
-    // Standard actions
-    menuItems.push({
-      label: 'Back',
-      enabled: view.webContents.canGoBack(),
-      click: () => view.webContents.goBack()
-    });
-    menuItems.push({
-      label: 'Forward',
-      enabled: view.webContents.canGoForward(),
-      click: () => view.webContents.goForward()
-    });
-    menuItems.push({
-      label: 'Reload',
-      click: () => view.webContents.reload()
-    });
-
-    if (menuItems.length > 0) {
-      Menu.buildFromTemplate(menuItems).popup();
-    }
-  });
-
-  // Load URL or start page
-  if (url) {
-    // Set background color immediately to prevent flash
-    view.setBackgroundColor('#0a0a0a');
-
-    // Check for Palantir URLs and show fun error page instead
-    if (url.includes('palantir.com')) {
-      console.log('[PALANTIR] Blocked tab creation with Palantir URL:', url);
-      const palantirInfo = encodeURIComponent(JSON.stringify({ url: url }));
-      view.webContents.loadFile('html/palantir.html', { hash: palantirInfo });
-    } else {
-      view.webContents.loadURL(url);
-    }
-  } else {
-    view.webContents.loadFile('html/start.html');
-
-    // Send theme and version to start page when it's loaded
-    view.webContents.once('dom-ready', () => {
-      const theme = settings.theme;
-      const version = app.getVersion();
-      view.webContents.send('theme-change', theme);
-      // Also directly apply theme and version via JavaScript to ensure it's applied
-      view.webContents.executeJavaScript(`
-        try {
-          const allThemeClasses = ['light', 'blueberry', 'acai', 'emerald'];
-          allThemeClasses.forEach(cls => document.body.classList.remove(cls));
-          if ('${theme}' !== 'dark') {
-            document.body.classList.add('${theme}');
-          } else {
-            // For dark theme, ensure we have the right styling
-            document.body.classList.remove('light', 'blueberry', 'acai', 'emerald');
-          }
-          localStorage.setItem('vitamin-theme', '${theme}');
-          // Set version
-          const versionEl = document.getElementById('app-version');
-          if (versionEl) versionEl.textContent = 'v${version}';
-
-          // Ensure proper background color
-          document.body.style.backgroundColor = '${theme}' === 'light' ? '#ffffff' : '#0a0a0a';
-
-          // Apply theme if applyTheme function exists
-          if (typeof applyTheme === 'function') {
-            applyTheme('${theme}');
-          }
-        } catch (err) {
-          console.error('Failed to apply initial theme:', err);
-        }
-      `);
-    });
-  }
-
-  // Switch to new tab
-  switchToTab(tabId);
-
-  // Send theme change immediately to ensure it's applied
-  setTimeout(() => {
-    if (view && view.webContents && !view.webContents.isDestroyed()) {
-      view.webContents.send('theme-change', settings.theme);
-    }
-  }, 50);
-
-  return tabId;
-}
 
 function switchToTab(tabId) {
   const view = tabViews.get(tabId);
@@ -1278,15 +991,17 @@ function getActiveView() {
 
 // Navigation handlers
 ipcMain.on('navigate', (event, url) => {
+  // Basic validation
+  if (typeof url !== 'string' || url.length > 4096) return;
   const view = getActiveView();
   if (!view) return;
 
-  let finalUrl = url;
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    if (url.includes('.') && !url.includes(' ')) {
-      finalUrl = 'https://' + url;
+  let finalUrl = url.trim();
+  if (!finalUrl.startsWith('http://') && !finalUrl.startsWith('https://')) {
+    if (finalUrl.includes('.') && !finalUrl.includes(' ')) {
+      finalUrl = 'https://' + finalUrl;
     } else {
-      finalUrl = 'https://duckduckgo.com/?q=' + encodeURIComponent(url);
+      finalUrl = 'https://duckduckgo.com/?q=' + encodeURIComponent(finalUrl);
     }
   }
 
@@ -1745,6 +1460,10 @@ ipcMain.handle('get-frequencies', () => {
 // Open external URL in default browser
 ipcMain.on('open-external', (event, url) => {
   const { shell } = require('electron');
+  if (!isValidExternalUrl(url)) {
+    console.warn('Blocked open-external with invalid URL:', url);
+    return;
+  }
   shell.openExternal(url);
 });
 
@@ -1920,26 +1639,51 @@ ipcMain.on('toggle-performance-mode', (event, enabled) => {
 // Apply performance mode to a view
 function applyPerformanceModeToView(view, enabled) {
   if (view && view.webContents && !view.webContents.isDestroyed()) {
+    const currentUrl = view.webContents.getURL();
+    const isInternalPage = !currentUrl || currentUrl.startsWith('file://');
+
     if (enabled) {
-      // Enable performance optimizations
       view.webContents.setBackgroundThrottling(true);
-      view.webContents.executeJavaScript(`
-        // Disable animations and transitions
-        if (document.head) {
-          const style = document.createElement('style');
-          style.textContent = '* { animation-duration: 0s !important; transition-duration: 0s !important; }';
-          style.id = 'vitamin-performance-mode';
-          document.head.appendChild(style);
+
+      const code = `
+        try {
+          if (document.head) {
+            const style = document.createElement('style');
+            style.textContent = '* { animation-duration: 0s !important; transition-duration: 0s !important; }';
+            style.id = 'vitamin-performance-mode';
+            document.head.appendChild(style);
+          }
+        } catch (e) {}
+      `;
+
+      if (isInternalPage) {
+        view.webContents.executeJavaScript(code).catch(() => {});
+      } else if (typeof view.webContents.executeJavaScriptInIsolatedWorld === 'function') {
+        try {
+          view.webContents.executeJavaScriptInIsolatedWorld(1, [{ code }]);
+        } catch (e) {
+          // fallback: do not execute in page context for external pages
         }
-      `).catch(() => {});
+      }
     } else {
-      // Disable performance optimizations
       view.webContents.setBackgroundThrottling(false);
-      view.webContents.executeJavaScript(`
-        // Remove performance mode styles
-        const perfStyle = document.getElementById('vitamin-performance-mode');
-        if (perfStyle) perfStyle.remove();
-      `).catch(() => {});
+
+      const code = `
+        try {
+          const perfStyle = document.getElementById('vitamin-performance-mode');
+          if (perfStyle) perfStyle.remove();
+        } catch (e) {}
+      `;
+
+      if (isInternalPage) {
+        view.webContents.executeJavaScript(code).catch(() => {});
+      } else if (typeof view.webContents.executeJavaScriptInIsolatedWorld === 'function') {
+        try {
+          view.webContents.executeJavaScriptInIsolatedWorld(1, [{ code }]);
+        } catch (e) {
+          // ignore
+        }
+      }
     }
   }
 }
@@ -1951,19 +1695,40 @@ function applyPerformanceModeToAllViews(enabled) {
   }
 }
 
-// Run bookmarklet (execute JavaScript in page context)
+// Run bookmarklet (execute JavaScript in page context) - SAFE: restrict execution to internal pages or allowlist
 ipcMain.handle('run-bookmarklet', async (event, jsCode) => {
   const view = getActiveView();
-  if (view) {
-    try {
+  if (!view) return { success: false, error: 'No active tab' };
+
+  // Basic validation
+  if (typeof jsCode !== 'string' || jsCode.length > 20000) return { success: false, error: 'Invalid script' };
+
+  try {
+    const currentUrl = view.webContents.getURL() || '';
+
+    // Allow only on internal pages or if user explicitly enabled bookmarklets for this site
+    const origin = (() => { try { return new URL(currentUrl).origin; } catch { return null; } })();
+
+    const allowOnThisSite = () => {
+      if (!origin) return false;
+      try {
+        const allowed = settings && Array.isArray(settings.bookmarkletAllowedSites) ? settings.bookmarkletAllowedSites : [];
+        return settings && settings.allowBookmarklets === true && allowed.includes(origin);
+      } catch (e) {
+        return false;
+      }
+    };
+
+    if (currentUrl.startsWith('file://') || allowOnThisSite()) {
       await view.webContents.executeJavaScript(jsCode);
       return { success: true };
-    } catch (err) {
-      console.error('Bookmarklet error:', err);
-      return { success: false, error: `Oopsie woopsie! Dat bookmarklet haz a boo boo: ${err.message} sowwy ~(˘▾˘~)` };
     }
+
+    return { success: false, error: 'Bookmarklets are disabled for remote sites. Enable in settings to allow.' };
+  } catch (err) {
+    console.error('Bookmarklet error:', err);
+    return { success: false, error: `Bookmarklet execution failed: ${err.message}` };
   }
-  return { success: false, error: 'No active tab open. Plz open a tab 1st sowwy (˘･_･˘)' };
 });
 
 // ===== Cookies =====
@@ -1996,12 +1761,32 @@ ipcMain.handle('get-downloads', () => {
 
 ipcMain.handle('open-download', (event, savePath) => {
   const { shell } = require('electron');
-  shell.openPath(savePath);
+  if (!isPathInDownloads(savePath)) {
+    console.warn('Attempt to open unknown download path:', savePath);
+    return { success: false, error: 'unknown-download' };
+  }
+  try {
+    shell.openPath(savePath);
+    return { success: true };
+  } catch (e) {
+    console.error('open-download failed:', e && e.message ? e.message : e);
+    return { success: false, error: e && e.message ? e.message : 'open-failed' };
+  }
 });
 
 ipcMain.handle('show-download-in-folder', (event, savePath) => {
   const { shell } = require('electron');
-  shell.showItemInFolder(savePath);
+  if (!isPathInDownloads(savePath)) {
+    console.warn('Attempt to reveal unknown download path:', savePath);
+    return { success: false, error: 'unknown-download' };
+  }
+  try {
+    shell.showItemInFolder(savePath);
+    return { success: true };
+  } catch (e) {
+    console.error('show-download-in-folder failed:', e && e.message ? e.message : e);
+    return { success: false, error: e && e.message ? e.message : 'reveal-failed' };
+  }
 });
 
 ipcMain.handle('clear-downloads', () => {
@@ -2318,6 +2103,7 @@ app.whenReady().then(async () => {
         }
       }
     }, 3000);
+
   }
 });
 
@@ -2593,19 +2379,6 @@ ipcMain.handle('close-browser', async () => {
   }
 });
 
-// Save session when main window is about to close
-app.on('before-quit', () => {
-  // Don't save session if nuke was triggered
-  if (settings.restoreSession && !nukeInProgress) {
-    saveSession();
-  }
-
-  // Destroy onboarding window if it exists
-  if (onboardingWindow && !onboardingWindow.isDestroyed()) {
-    onboardingWindow.destroy();
-    onboardingWindow = null;
-  }
-});
 
 app.on('activate', () => {
   if (BrowserWindow.getAllWindows().length === 0) {

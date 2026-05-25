@@ -135,5 +135,13 @@ contextBridge.exposeInMainWorld('vitamin', {
   onPoisonStats: (callback) => ipcRenderer.on('poison-stats', (event, stats) => callback(stats)),
   onBlockedCount: (callback) => ipcRenderer.on('blocked-count', (event, count) => callback(count)),
   onOnboardingCompleted: (callback) => ipcRenderer.on('onboarding-completed', () => callback()),
-  onSettingsChanged: (callback) => ipcRenderer.on('settings-changed', () => callback())
+  onSettingsChanged: (callback) => ipcRenderer.on('settings-changed', () => callback()),
+
+  // Permissions
+  onPermissionRequested: (callback) => ipcRenderer.on('permission-requested', (event, data) => callback(data)),
+  respondPermissionRequest: (requestId, decision, remember) => ipcRenderer.invoke('respond-permission-request', { requestId, decision, remember }),
+
+  // Site permission helpers
+  getSitePermissions: (site) => ipcRenderer.invoke('get-site-permissions', site),
+  setSitePermission: (site, permission, value) => ipcRenderer.invoke('set-site-permission', { site, permission, value })
 });
