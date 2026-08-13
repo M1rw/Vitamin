@@ -17,6 +17,7 @@ const {
 } = require('./workspaces');
 const { canSuspendTab, summarizeWorkspaceLedger } = require('./tab-performance');
 const { createGroupRecord, normalizeGroups, normalizeTabOrganization } = require('./tab-groups');
+const { SUPPORTED_PERMISSIONS, getRule, normalizeLedger, normalizeOrigin, normalizeRules, upsertRule } = require('./privacy-ledger');
 const { frequencies, getSearchTerms, getSites, getDelay, getPersonaList, getFrequencyList } = require('./poisonData');
 const fetch = require('cross-fetch');
 const os = require('os');
@@ -95,6 +96,7 @@ const sessionPath = path.join(app.getPath('userData'), 'session.json');
 const customPersonasPath = path.join(app.getPath('userData'), 'custom-personas.json');
 const workspacesPath = path.join(app.getPath('userData'), 'workspaces.json');
 const tabGroupsPath = path.join(app.getPath('userData'), 'tab-groups.json');
+const privacyStatePath = path.join(app.getPath('userData'), 'privacy-state.json');
 
 // Get performance metrics
 function getPerformanceMetrics() {
@@ -476,27 +478,13 @@ function applyPrivacySettings(targetSession = session.defaultSession) {
     });
   }
 
-  // WebRTC leak protection - disable local IP discovery
-  if (settings.blockWebRTC) {
-    ses.setPermissionRequestHandler((webContents, permission, callback) => {
-      // Block WebRTC-related permissions by default
-      if (permission === 'media') {
-        callback(false);
-        return;
-      }
-      // Block geolocation by default
-      if (permission === 'geolocation') {
-        callback(false);
-        return;
-      }
-      // Block notifications by default
-      if (permission === 'notifications') {
-        callback(false);
-        return;
-      }
-      callback(true);
-    });
-  }
+  // Remote-content permissions are denied unless an explicit local site rule exists.
+  ses.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(resolvePermissionDecision(webContents, permission, webContents.getURL(), 'request'));
+  });
+  ses.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
+    return resolvePermissionDecision(webContents, permission, requestingOrigin, 'check');
+  });
 
   // HTTPS upgrading handler
   // Note: Palantir blocking is handled at the webContents level (will-navigate, createTab, navigate IPC)
@@ -567,6 +555,75 @@ let nextTabId = 1;
 let workspaces = [{ ...DEFAULT_WORKSPACE }];
 let activeWorkspaceId = DEFAULT_WORKSPACE.id;
 let tabGroups = [];
+let privacyRules = [];
+let privacyLedger = [];
+let lastPrivacyDecision = { key: '', timestamp: 0 };
+
+function loadPrivacyState() {
+  try {
+    const data = fs.existsSync(privacyStatePath) ? JSON.parse(fs.readFileSync(privacyStatePath, 'utf8')) : {};
+    const workspaceIds = workspaces.map((workspace) => workspace.id);
+    privacyRules = normalizeRules(data.rules, workspaceIds);
+    privacyLedger = normalizeLedger(data.ledger, workspaceIds);
+  } catch (error) {
+    console.error('Failed to load local privacy state:', error.message);
+    privacyRules = [];
+    privacyLedger = [];
+  }
+}
+
+function savePrivacyState() {
+  try {
+    fs.writeFileSync(privacyStatePath, JSON.stringify({ rules: privacyRules, ledger: privacyLedger }, null, 2));
+  } catch (error) {
+    console.error('Failed to save local privacy state:', error.message);
+  }
+}
+
+function getWorkspaceIdForWebContents(webContents) {
+  for (const [tabId, view] of tabViews) {
+    if (view?.webContents === webContents) return tabs.find((tab) => tab.id === tabId)?.workspaceId || null;
+  }
+  return null;
+}
+
+function recordPrivacyDecision(workspaceId, origin, permission, decision, source) {
+  if (!workspaceId || !origin || !SUPPORTED_PERMISSIONS.has(permission)) return;
+  const key = `${workspaceId}|${origin}|${permission}|${decision}|${source}`;
+  const now = Date.now();
+  if (lastPrivacyDecision.key === key && now - lastPrivacyDecision.timestamp < 1500) return;
+  lastPrivacyDecision = { key, timestamp: now };
+  privacyLedger.push({ workspaceId, origin, permission, decision, source, timestamp: now });
+  if (privacyLedger.length > 500) privacyLedger = privacyLedger.slice(-500);
+  savePrivacyState();
+  sendPrivacyStateUpdate();
+}
+
+function resolvePermissionDecision(webContents, permission, originHint, source) {
+  const workspaceId = getWorkspaceIdForWebContents(webContents);
+  const origin = normalizeOrigin(originHint) || normalizeOrigin(webContents?.getURL?.());
+  if (!workspaceId || !origin || !SUPPORTED_PERMISSIONS.has(permission)) return false;
+  const decision = getRule(privacyRules, workspaceId, origin, permission)?.decision || 'deny';
+  recordPrivacyDecision(workspaceId, origin, permission, decision, source);
+  return decision === 'allow';
+}
+
+function getPrivacyStateForWorkspace(workspaceId) {
+  const activeTab = tabs.find((tab) => tab.id === activeTabId && tab.workspaceId === workspaceId);
+  return {
+    workspaceId,
+    currentOrigin: normalizeOrigin(activeTab?.url) || null,
+    supportedPermissions: [...SUPPORTED_PERMISSIONS].sort(),
+    rules: privacyRules.filter((rule) => rule.workspaceId === workspaceId),
+    ledger: privacyLedger.filter((entry) => entry.workspaceId === workspaceId).slice(-80).reverse(),
+  };
+}
+
+function sendPrivacyStateUpdate() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('privacy-state-update', getPrivacyStateForWorkspace(activeWorkspaceId));
+  }
+}
 
 function loadTabGroups() {
   try {
@@ -1449,6 +1506,7 @@ function sendTabsUpdate() {
     activeTabId
   });
   sendWorkspacesUpdate();
+  sendPrivacyStateUpdate();
 }
 
 function getActiveView() {
@@ -1756,7 +1814,10 @@ ipcMain.handle('delete-workspace', async (event, workspaceId) => {
   }
   tabs = tabs.filter((tab) => tab.workspaceId !== workspaceId);
   tabGroups = tabGroups.filter((group) => group.workspaceId !== workspaceId);
+  privacyRules = privacyRules.filter((rule) => rule.workspaceId !== workspaceId);
+  privacyLedger = privacyLedger.filter((entry) => entry.workspaceId !== workspaceId);
   saveTabGroups();
+  savePrivacyState();
   workspaces = workspaces.filter((item) => item.id !== workspaceId);
   saveWorkspaces();
 
@@ -2262,6 +2323,42 @@ ipcMain.handle('run-bookmarklet', async (event, jsCode) => {
   return { success: false, error: 'No active tab open. Plz open a tab 1st sowwy (˘･_･˘)' };
 });
 
+// ===== Local privacy ledger =====
+ipcMain.handle('get-privacy-state', (event) => {
+  if (!requireTrustedInternalSender(event, 'get-privacy-state', ['index.html'])) return null;
+  return getPrivacyStateForWorkspace(activeWorkspaceId);
+});
+
+ipcMain.handle('set-privacy-rule', (event, input) => {
+  if (!requireTrustedInternalSender(event, 'set-privacy-rule', ['index.html'])) return { ok: false, error: 'untrusted-sender' };
+  const nextRules = upsertRule(privacyRules, { ...input, workspaceId: activeWorkspaceId }, workspaces.map((workspace) => workspace.id));
+  if (!nextRules) return { ok: false, error: 'invalid-rule' };
+  privacyRules = nextRules;
+  savePrivacyState();
+  sendPrivacyStateUpdate();
+  return { ok: true };
+});
+
+ipcMain.handle('delete-privacy-rule', (event, origin, permission) => {
+  if (!requireTrustedInternalSender(event, 'delete-privacy-rule', ['index.html'])) return false;
+  const safeOrigin = normalizeOrigin(origin);
+  if (!safeOrigin || !SUPPORTED_PERMISSIONS.has(permission)) return false;
+  const originalLength = privacyRules.length;
+  privacyRules = privacyRules.filter((rule) => !(rule.workspaceId === activeWorkspaceId && rule.origin === safeOrigin && rule.permission === permission));
+  if (privacyRules.length === originalLength) return false;
+  savePrivacyState();
+  sendPrivacyStateUpdate();
+  return true;
+});
+
+ipcMain.handle('clear-privacy-ledger', (event) => {
+  if (!requireTrustedInternalSender(event, 'clear-privacy-ledger', ['index.html'])) return false;
+  privacyLedger = privacyLedger.filter((entry) => entry.workspaceId !== activeWorkspaceId);
+  savePrivacyState();
+  sendPrivacyStateUpdate();
+  return true;
+});
+
 // ===== Cookies =====
 ipcMain.handle('get-cookies', async () => {
   try {
@@ -2438,6 +2535,7 @@ app.whenReady().then(async () => {
   // Load settings before creating window
   loadSettings();
   loadWorkspaces();
+  loadPrivacyState();
   loadTabGroups();
 
   // Set native theme so websites respect light/dark preference on startup

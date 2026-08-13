@@ -33,6 +33,10 @@ contextBridge.exposeInMainWorld('vitamin', {
   assignTabGroup: (tabId, groupId) => ipcRenderer.invoke('assign-tab-group', tabId, groupId),
   deleteTabGroup: (groupId) => ipcRenderer.invoke('delete-tab-group', groupId),
   toggleTabPin: (tabId) => ipcRenderer.invoke('toggle-tab-pin', tabId),
+  getPrivacyState: () => ipcRenderer.invoke('get-privacy-state'),
+  setPrivacyRule: (input) => ipcRenderer.invoke('set-privacy-rule', input),
+  deletePrivacyRule: (origin, permission) => ipcRenderer.invoke('delete-privacy-rule', origin, permission),
+  clearPrivacyLedger: () => ipcRenderer.invoke('clear-privacy-ledger'),
 
   // Poisoning
   togglePoison: (enabled) => ipcRenderer.send('toggle-poison', enabled),
@@ -146,6 +150,7 @@ contextBridge.exposeInMainWorld('vitamin', {
   onUrlChanged: (callback) => ipcRenderer.on('url-changed', (event, url) => callback(url)),
   onTabsUpdate: (callback) => ipcRenderer.on('tabs-update', (event, data) => callback(data)),
   onWorkspacesUpdate: (callback) => ipcRenderer.on('workspaces-update', (event, data) => callback(data)),
+  onPrivacyStateUpdate: (callback) => ipcRenderer.on('privacy-state-update', (event, data) => callback(data)),
   onPoisonActivity: (callback) => ipcRenderer.on('poison-activity', (event, activity) => callback(activity)),
   onPoisonStats: (callback) => ipcRenderer.on('poison-stats', (event, stats) => callback(stats)),
   onBlockedCount: (callback) => ipcRenderer.on('blocked-count', (event, count) => callback(count)),

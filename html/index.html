@@ -372,6 +372,30 @@
     .command-item-label { flex: 1; font-size: 12px; }
     .command-item-meta { color: var(--text-muted); font-size: 10px; }
     .command-footer { display: flex; justify-content: space-between; padding: 9px 12px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 10px; }
+    .privacy-overlay { display: none; position: fixed; inset: 0; z-index: 20010; padding-top: 8vh; background: rgba(0, 0, 0, 0.52); backdrop-filter: blur(4px); }
+    .privacy-overlay.open { display: block; }
+    .privacy-panel { width: min(760px, calc(100vw - 32px)); max-height: 80vh; margin: 0 auto; overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-secondary); box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45); -webkit-app-region: no-drag; }
+    .privacy-header { display: flex; align-items: center; justify-content: space-between; padding: 16px; border-bottom: 1px solid var(--border); }
+    .privacy-title { margin: 0; color: var(--text-primary); font-size: 14px; }
+    .privacy-subtitle { margin: 3px 0 0; color: var(--text-muted); font-size: 10px; }
+    .privacy-close { border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 20px; }
+    .privacy-body { max-height: calc(80vh - 72px); overflow: auto; padding: 14px 16px 18px; }
+    .privacy-site { margin-bottom: 14px; padding: 10px; border-radius: 8px; background: var(--bg-primary); color: var(--text-secondary); font-size: 11px; word-break: break-all; }
+    .privacy-controls { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+    .privacy-select { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 8px; background: var(--bg-primary); color: var(--text-primary); font-size: 11px; }
+    .privacy-action { border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; background: transparent; color: var(--text-primary); cursor: pointer; font-size: 11px; }
+    .privacy-action.allow { color: #62d49c; border-color: rgba(98, 212, 156, 0.38); }
+    .privacy-action.deny { color: #ff8787; border-color: rgba(255, 135, 135, 0.38); }
+    .privacy-section { margin-top: 16px; }
+    .privacy-section-title { margin: 0 0 8px; color: var(--text-muted); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .privacy-list { display: flex; flex-direction: column; gap: 5px; }
+    .privacy-row { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 7px; background: var(--bg-primary); color: var(--text-secondary); font-size: 10px; }
+    .privacy-row-main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .privacy-badge { border-radius: 99px; padding: 3px 6px; font-size: 9px; text-transform: uppercase; }
+    .privacy-badge.allow { background: rgba(98, 212, 156, 0.14); color: #62d49c; }
+    .privacy-badge.deny { background: rgba(255, 135, 135, 0.14); color: #ff8787; }
+    .privacy-remove { border: 0; background: transparent; color: var(--text-muted); cursor: pointer; font-size: 10px; }
+    .privacy-empty { padding: 10px; color: var(--text-muted); font-size: 10px; }
 
     .url-container {
       flex: 1;
@@ -3330,6 +3354,12 @@
       <span id="poison-label">Poison</span>
     </button>
 
+    <button class="toolbar-btn" id="privacy-btn" title="Local Privacy Ledger" style="-webkit-app-region: no-drag;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>
+      </svg>
+    </button>
+
     <button class="toolbar-btn" id="command-btn" title="Command Center (Ctrl+K)" style="-webkit-app-region: no-drag;">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="10"/><path d="m8 12 2.5 2.5L16 9"/>
@@ -3366,6 +3396,25 @@
           <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
       </button>
+    </div>
+  </div>
+
+  <div class="privacy-overlay" id="privacy-overlay" aria-hidden="true">
+    <div class="privacy-panel" role="dialog" aria-modal="true" aria-label="Local Privacy Ledger">
+      <div class="privacy-header">
+        <div><h2 class="privacy-title">Local Privacy Ledger</h2><p class="privacy-subtitle">Rules and requests stored only on this device.</p></div>
+        <button class="privacy-close" id="privacy-close" aria-label="Close privacy ledger">×</button>
+      </div>
+      <div class="privacy-body">
+        <div class="privacy-site" id="privacy-site">No HTTPS site selected.</div>
+        <div class="privacy-controls">
+          <select class="privacy-select" id="privacy-permission" aria-label="Permission type"></select>
+          <button class="privacy-action allow" id="privacy-allow">Allow</button>
+          <button class="privacy-action deny" id="privacy-deny">Block</button>
+        </div>
+        <section class="privacy-section"><h3 class="privacy-section-title">Site rules</h3><div class="privacy-list" id="privacy-rules"></div></section>
+        <section class="privacy-section"><h3 class="privacy-section-title">Recent local decisions</h3><div class="privacy-list" id="privacy-ledger"></div><button class="privacy-action" id="privacy-clear" style="margin-top:8px;">Clear local ledger</button></section>
+      </div>
     </div>
   </div>
 
@@ -4007,6 +4056,16 @@ https://www.coindesk.com"></textarea>
     const commandOverlay = document.getElementById('command-overlay');
     const commandInput = document.getElementById('command-input');
     const commandResults = document.getElementById('command-results');
+    const privacyBtn = document.getElementById('privacy-btn');
+    const privacyOverlay = document.getElementById('privacy-overlay');
+    const privacyClose = document.getElementById('privacy-close');
+    const privacySite = document.getElementById('privacy-site');
+    const privacyPermission = document.getElementById('privacy-permission');
+    const privacyAllow = document.getElementById('privacy-allow');
+    const privacyDeny = document.getElementById('privacy-deny');
+    const privacyRules = document.getElementById('privacy-rules');
+    const privacyLedger = document.getElementById('privacy-ledger');
+    const privacyClear = document.getElementById('privacy-clear');
     const workspaceButton = document.getElementById('workspace-button');
     const workspaceMenu = document.getElementById('workspace-menu');
     const workspaceName = document.getElementById('workspace-name');
@@ -4014,6 +4073,7 @@ https://www.coindesk.com"></textarea>
     let currentWorkspaceData = { workspaces: [], activeWorkspaceId: 'personal' };
     let commandEntries = [];
     let commandIndex = 0;
+    let currentPrivacyState = null;
 
     backBtn.addEventListener('click', () => window.vitamin.goBack());
     forwardBtn.addEventListener('click', () => window.vitamin.goForward());
@@ -4127,6 +4187,7 @@ https://www.coindesk.com"></textarea>
         { section: 'Actions', icon: '⌁', label: 'Park background tabs', meta: 'Current workspace', run: () => window.vitamin.suspendBackgroundTabs() },
         { section: 'Actions', icon: '◆', label: activeTab?.pinned ? 'Unpin active tab' : 'Pin active tab', meta: 'Tab protection', run: () => activeTab && window.vitamin.toggleTabPin(activeTab.id) },
         { section: 'Actions', icon: '◫', label: 'Create group from active tab', meta: 'Organization', run: () => activeTab && createGroupForTab(activeTab.id) },
+        { section: 'Actions', icon: '◈', label: 'Open local privacy ledger', meta: 'Site rules', run: () => openPrivacyLedger() },
       ];
 
       data.tabs.forEach((tab) => {
@@ -4216,6 +4277,110 @@ https://www.coindesk.com"></textarea>
         await commandEntries[commandIndex].run();
         closeCommandCenter();
       }
+    });
+
+    function formatLedgerTime(timestamp) {
+      try { return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); } catch { return 'Local'; }
+    }
+
+    function emptyPrivacyList(target, text) {
+      target.replaceChildren();
+      const empty = document.createElement('div');
+      empty.className = 'privacy-empty';
+      empty.textContent = text;
+      target.appendChild(empty);
+    }
+
+    function renderPrivacyState(state) {
+      currentPrivacyState = state;
+      if (!state) return;
+      privacySite.textContent = state.currentOrigin ? `Current HTTPS site: ${state.currentOrigin}` : 'No HTTPS site selected. Navigate to a secure site to create a site-specific rule.';
+      const selectedPermission = privacyPermission.value;
+      privacyPermission.replaceChildren();
+      state.supportedPermissions.forEach((permission) => {
+        const option = document.createElement('option');
+        option.value = permission;
+        option.textContent = permission.replace(/-/g, ' ');
+        privacyPermission.appendChild(option);
+      });
+      if (state.supportedPermissions.includes(selectedPermission)) privacyPermission.value = selectedPermission;
+
+      privacyRules.replaceChildren();
+      if (!state.rules.length) {
+        emptyPrivacyList(privacyRules, 'No local site rules. Supported permissions are denied by default.');
+      } else {
+        state.rules.forEach((rule) => {
+          const row = document.createElement('div');
+          row.className = 'privacy-row';
+          const detail = document.createElement('span');
+          detail.className = 'privacy-row-main';
+          detail.textContent = `${rule.origin} · ${rule.permission.replace(/-/g, ' ')}`;
+          const badge = document.createElement('span');
+          badge.className = `privacy-badge ${rule.decision === 'allow' ? 'allow' : 'deny'}`;
+          badge.textContent = rule.decision;
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'privacy-remove';
+          remove.textContent = 'Revoke';
+          remove.addEventListener('click', async () => {
+            await window.vitamin.deletePrivacyRule(rule.origin, rule.permission);
+          });
+          row.append(detail, badge, remove);
+          privacyRules.appendChild(row);
+        });
+      }
+
+      privacyLedger.replaceChildren();
+      if (!state.ledger.length) {
+        emptyPrivacyList(privacyLedger, 'No local permission decisions recorded for this workspace.');
+      } else {
+        state.ledger.forEach((entry) => {
+          const row = document.createElement('div');
+          row.className = 'privacy-row';
+          const detail = document.createElement('span');
+          detail.className = 'privacy-row-main';
+          detail.textContent = `${entry.origin} · ${entry.permission.replace(/-/g, ' ')} · ${formatLedgerTime(entry.timestamp)}`;
+          const badge = document.createElement('span');
+          badge.className = `privacy-badge ${entry.decision === 'allow' ? 'allow' : 'deny'}`;
+          badge.textContent = entry.decision;
+          row.append(detail, badge);
+          privacyLedger.appendChild(row);
+        });
+      }
+    }
+
+    function closePrivacyLedger() {
+      privacyOverlay.classList.remove('open');
+      privacyOverlay.setAttribute('aria-hidden', 'true');
+    }
+
+    async function openPrivacyLedger() {
+      privacyOverlay.classList.add('open');
+      privacyOverlay.setAttribute('aria-hidden', 'false');
+      renderPrivacyState(await window.vitamin.getPrivacyState());
+    }
+
+    async function setCurrentPrivacyRule(decision) {
+      if (!currentPrivacyState?.currentOrigin) {
+        window.alert('Open an HTTPS site first to create a local, site-specific rule.');
+        return;
+      }
+      const result = await window.vitamin.setPrivacyRule({ origin: currentPrivacyState.currentOrigin, permission: privacyPermission.value, decision });
+      if (!result?.ok) window.alert('That local privacy rule could not be saved.');
+    }
+
+    privacyBtn.addEventListener('click', openPrivacyLedger);
+    privacyClose.addEventListener('click', closePrivacyLedger);
+    privacyAllow.addEventListener('click', () => setCurrentPrivacyRule('allow'));
+    privacyDeny.addEventListener('click', () => setCurrentPrivacyRule('deny'));
+    privacyClear.addEventListener('click', async () => {
+      if (window.confirm('Clear local permission-decision history for this workspace? Site rules will remain.')) await window.vitamin.clearPrivacyLedger();
+    });
+    privacyOverlay.addEventListener('click', (event) => {
+      if (event.target === privacyOverlay) closePrivacyLedger();
+    });
+    window.vitamin.onPrivacyStateUpdate((state) => {
+      if (privacyOverlay.classList.contains('open')) renderPrivacyState(state);
     });
 
     function closeWorkspaceMenu() {

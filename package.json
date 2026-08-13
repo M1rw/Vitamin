@@ -19,8 +19,9 @@
     "test:performance": "node --test test/tab-performance.test.mjs",
     "test:tab-groups": "node --test test/tab-groups.test.mjs",
     "test:ui": "node --test test/validate-index-script.mjs",
-    "test:security": "npm run check:ipc && npm run test:ipc && npm run test:workspaces && npm run test:performance && npm run test:tab-groups && npm run test:ui",
-    "check:ipc": "node --check main.js && node --check preload.js && node --check preload-start.js && node --check ipc-guards.js && node --check workspaces.js && node --check tab-performance.js && node --check tab-groups.js && node --check adblock.js"
+    "test:privacy": "node --test test/privacy-ledger.test.mjs",
+    "test:security": "npm run check:ipc && npm run test:ipc && npm run test:workspaces && npm run test:performance && npm run test:tab-groups && npm run test:privacy && npm run test:ui",
+    "check:ipc": "node --check main.js && node --check preload.js && node --check preload-start.js && node --check ipc-guards.js && node --check workspaces.js && node --check tab-performance.js && node --check tab-groups.js && node --check privacy-ledger.js && node --check adblock.js"
   },
   "keywords": [
     "privacy",
@@ -153,6 +154,7 @@
       "workspaces.js",
       "tab-performance.js",
       "tab-groups.js",
+      "privacy-ledger.js",
       "adblock.js",
       "bookmarks.js",
       "history.js",

@@ -42,6 +42,14 @@
 
 - [x] Map tab state and current renderer controls for group and pinning metadata.
 - [x] Implement persistent tab groups and pinning with validated IPC methods.
-- [ ] Implement keyboard command search for tabs, workspaces, and core browser actions.
+- [x] Implement keyboard command search for tabs, workspaces, and core browser actions.
 - [x] Add regression coverage and run source-level verification.
 - [x] Push the verified tab-organization increment to the connected GitHub repository.
+
+## Privacy ledger and permission cycle
+
+- [x] Map existing privacy settings and Electron permission hooks across workspace sessions.
+- [x] Implement validated, persistent per-site permission rules and local ledger entries.
+- [x] Add browser controls to inspect, revoke, and clear local privacy records.
+- [x] Add regression coverage and run source-level verification.
+- [x] Push the verified privacy-ledger increment to the connected GitHub repository.
