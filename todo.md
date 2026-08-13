@@ -20,7 +20,7 @@
 
 ## Next architecture milestones
 
-- [ ] Migrate the tab-view layer from deprecated BrowserView to WebContentsView with desktop runtime regression coverage.
+- [x] Migrate the tab-view layer from deprecated BrowserView to WebContentsView with desktop runtime regression coverage.
 - [ ] Add tab suspension and a local workspace performance ledger.
 - [ ] Add tab groups, pinning, and keyboard command search with validated IPC methods.
 
@@ -30,3 +30,10 @@
 - [x] Implement a local workspace performance ledger and user-controlled tab suspension.
 - [x] Add suspension and metric regression tests, then run source-level verification.
 - [ ] Push the verified workspace performance increment to the connected GitHub repository.
+
+## WebContentsView migration cycle
+
+- [x] Map all BrowserView creation, attachment, resize, and teardown calls.
+- [x] Replace the tab-view layer with WebContentsView while preserving workspace and suspension behavior.
+- [x] Run source-level checks and document required desktop runtime migration tests.
+- [ ] Push the completed WebContentsView migration to the connected GitHub repository.

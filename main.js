@@ -1,4 +1,4 @@
-const { app, BrowserWindow, BrowserView, ipcMain, nativeImage, session, globalShortcut, Menu, net, shell, nativeTheme } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, nativeImage, session, globalShortcut, Menu, net, shell, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const {
@@ -559,7 +559,7 @@ let poisonViews = []; // Hidden views for poisoning
 
 // Tab management
 let tabs = []; // Array of { id, title, url }
-let tabViews = new Map(); // Map<tabId, BrowserView>
+let tabViews = new Map(); // Map<tabId, WebContentsView>
 let activeTabId = null;
 let nextTabId = 1;
 let workspaces = [{ ...DEFAULT_WORKSPACE }];
@@ -588,6 +588,18 @@ function saveWorkspaces() {
 
 function getWorkspace(workspaceId) {
   return workspaces.find((workspace) => workspace.id === workspaceId) || null;
+}
+
+function attachTabView(view) {
+  if (!mainWindow || !view || view.webContents.isDestroyed()) return;
+  mainWindow.contentView.addChildView(view);
+}
+
+function detachTabView(view) {
+  if (!mainWindow || !view) return;
+  if (mainWindow.contentView.children.includes(view)) {
+    mainWindow.contentView.removeChildView(view);
+  }
 }
 
 function getWorkspaceSession(workspaceId) {
@@ -659,7 +671,7 @@ function switchWorkspace(workspaceId) {
   if (workspaceId === activeWorkspaceId) return true;
 
   const currentView = getActiveView();
-  if (currentView && mainWindow) mainWindow.removeBrowserView(currentView);
+  detachTabView(currentView);
   activeWorkspaceId = workspaceId;
   saveWorkspaces();
 
@@ -739,6 +751,13 @@ function createWindow() {
   });
 
   mainWindow.on('resize', updateActiveTabBounds);
+  mainWindow.on('closed', () => {
+    for (const view of tabViews.values()) {
+      if (view && view.webContents && !view.webContents.isDestroyed()) view.webContents.close();
+    }
+    tabViews.clear();
+    mainWindow = null;
+  });
 
   // Restore session or create first tab
   let restoredSession = false;
@@ -892,7 +911,7 @@ function updateActiveTabBounds() {
 function createTab(url = null, requestedWorkspaceId = activeWorkspaceId) {
   const workspaceId = getWorkspace(requestedWorkspaceId) ? requestedWorkspaceId : DEFAULT_WORKSPACE.id;
   const tabId = nextTabId++;
-  const view = new BrowserView({
+  const view = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, 'preload-start.js'),
       nodeIntegration: false,
@@ -1256,8 +1275,10 @@ function switchToTab(tabId) {
     }
   }
 
+  const previousView = getActiveView();
+  if (previousView && previousView !== view) detachTabView(previousView);
   activeTabId = tabId;
-  mainWindow.setBrowserView(view);
+  attachTabView(view);
   updateActiveTabBounds();
 
   // Update URL bar
@@ -1354,6 +1375,7 @@ function closeTab(tabId) {
   tabs.splice(index, 1);
   const view = tabViews.get(tabId);
   if (view) {
+    if (tabId === activeTabId) detachTabView(view);
     // Check if the view's webContents is already destroyed
     if (!view.webContents.isDestroyed()) {
       view.webContents.destroy();
@@ -1739,7 +1761,7 @@ ipcMain.on('settings-close', () => {
   updateActiveTabBounds();
 });
 
-// Left panels - need to shrink BrowserView from the left side
+// Left panels resize the active WebContentsView from the left side.
 ipcMain.on('left-panel-open', () => {
   leftPanelOpen = true;
   rightPanelOpen = false;
@@ -1762,12 +1784,12 @@ ipcMain.on('dashboard-hide', () => {
   updateActiveTabBounds();
 });
 
-// Hide BrowserView for modals (What's New, etc.)
+// Hide the active WebContentsView for modals (What's New, etc.).
 ipcMain.on('modal-open', () => {
   if (!mainWindow || !activeTabId) return;
   const view = tabViews.get(activeTabId);
   if (view) {
-    mainWindow.removeBrowserView(view);
+    detachTabView(view);
   }
 });
 
@@ -1775,7 +1797,7 @@ ipcMain.on('modal-close', () => {
   if (!mainWindow || !activeTabId) return;
   const view = tabViews.get(activeTabId);
   if (view && !view.webContents.isDestroyed()) {
-    mainWindow.setBrowserView(view);
+    attachTabView(view);
     updateActiveTabBounds();
   }
 });
@@ -1821,7 +1843,7 @@ async function doPoison() {
     activity = { type: 'search', query: term, time: new Date().toLocaleTimeString() };
 
     // Create hidden view for the search
-    const poisonView = new BrowserView({
+    const poisonView = new WebContentsView({
       webPreferences: { nodeIntegration: false },
       backgroundColor: '#0a0a0a'
     });
@@ -1847,7 +1869,7 @@ async function doPoison() {
     const site = websites[Math.floor(Math.random() * websites.length)];
     activity = { type: 'visit', url: site, time: new Date().toLocaleTimeString() };
 
-    const poisonView = new BrowserView({
+    const poisonView = new WebContentsView({
       webPreferences: { nodeIntegration: false },
       backgroundColor: '#0a0a0a'
     });
