@@ -1,6 +1,14 @@
 const { app, BrowserWindow, BrowserView, ipcMain, nativeImage, session, globalShortcut, Menu, net, shell, nativeTheme } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const {
+  isKnownDownloadPath,
+  isSafeBookmarklet,
+  normaliseNavigationInput,
+  normaliseSearchQuery,
+  parseHttpUrl,
+  requireTrustedInternalSender,
+} = require('./ipc-guards');
 const { frequencies, getSearchTerms, getSites, getDelay, getPersonaList, getFrequencyList } = require('./poisonData');
 const fetch = require('cross-fetch');
 const os = require('os');
@@ -1236,17 +1244,12 @@ function getActiveView() {
 
 // Navigation handlers
 ipcMain.on('navigate', (event, url) => {
+  if (!requireTrustedInternalSender(event, 'navigate', ['index.html'])) return;
   const view = getActiveView();
   if (!view) return;
 
-  let finalUrl = url;
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    if (url.includes('.') && !url.includes(' ')) {
-      finalUrl = 'https://' + url;
-    } else {
-      finalUrl = 'https://duckduckgo.com/?q=' + encodeURIComponent(url);
-    }
-  }
+  const finalUrl = normaliseNavigationInput(url);
+  if (!finalUrl) return;
 
   // Check for Palantir URLs and show fun error page instead
   if (finalUrl.includes('palantir.com')) {
@@ -1275,7 +1278,10 @@ ipcMain.on('go-forward', () => {
 
 // Handle search requests from start page
 ipcMain.on('search-request', (event, query) => {
-  const searchUrl = `https://duckduckgo.com/?q=${query}`;
+  if (!requireTrustedInternalSender(event, 'search-request', ['start.html'])) return;
+  const safeQuery = normaliseSearchQuery(query);
+  if (!safeQuery) return;
+  const searchUrl = `https://duckduckgo.com/?q=${encodeURIComponent(safeQuery)}`;
 
   // If we're on the start page (no tabs), create a new tab with the search
   if (tabs.length === 0) {
@@ -1293,21 +1299,25 @@ ipcMain.on('search-request', (event, query) => {
 
 // Handle "Proceed Anyway" for Palantir URLs
 ipcMain.on('proceed-palantir-url', (event, url) => {
+  if (!requireTrustedInternalSender(event, 'proceed-palantir-url', ['palantir.html'])) return;
   const view = getActiveView();
-  if (!view || !url) return;
+  const safeUrl = parseHttpUrl(url);
+  if (!view || !safeUrl) return;
 
-  console.log('Proceeding to Palantir URL without filtering:', url);
+  console.log('Proceeding to Palantir URL without filtering:', safeUrl.toString());
 
   // Navigate to the URL without any filtering
-  view.webContents.loadURL(url);
+  view.webContents.loadURL(safeUrl.toString());
 });
 
 // Handle "Proceed Anyway" for blocked URLs (error -20)
 ipcMain.on('proceed-blocked-url', (event, url) => {
+  if (!requireTrustedInternalSender(event, 'proceed-blocked-url', ['blocked.html', 'error.html'])) return;
   const view = getActiveView();
-  if (!view || !url) return;
+  const safeUrl = parseHttpUrl(url);
+  if (!view || !safeUrl) return;
 
-  console.log('Proceeding to blocked URL with all blocking temporarily disabled:', url);
+  console.log('Proceeding to blocked URL with all blocking temporarily disabled:', safeUrl.toString());
 
   // Temporarily disable all blocking mechanisms
   const wasAdBlockingEnabled = adBlockingEnabled;
@@ -1323,7 +1333,7 @@ ipcMain.on('proceed-blocked-url', (event, url) => {
   }
 
   // Navigate to the URL
-  view.webContents.loadURL(url);
+  view.webContents.loadURL(safeUrl.toString());
 
   // Re-enable all blocking after page finishes loading
   view.webContents.once('did-finish-load', () => {
@@ -1702,8 +1712,13 @@ ipcMain.handle('get-frequencies', () => {
 
 // Open external URL in default browser
 ipcMain.on('open-external', (event, url) => {
+  if (!requireTrustedInternalSender(event, 'open-external', ['index.html'])) return;
+  const safeUrl = parseHttpUrl(url);
+  if (!safeUrl) return;
   const { shell } = require('electron');
-  shell.openExternal(url);
+  shell.openExternal(safeUrl.toString()).catch((error) => {
+    console.error('[IPC] Failed to open validated external URL:', error.message);
+  });
 });
 
 ipcMain.on('set-theme', (event, theme) => {
@@ -1898,6 +1913,8 @@ function applyPerformanceModeToAllViews(enabled) {
 
 // Run bookmarklet (execute JavaScript in page context)
 ipcMain.handle('run-bookmarklet', async (event, jsCode) => {
+  if (!requireTrustedInternalSender(event, 'run-bookmarklet', ['index.html'])) return false;
+  if (!isSafeBookmarklet(jsCode)) return false;
   const view = getActiveView();
   if (view) {
     try {
@@ -1940,13 +1957,18 @@ ipcMain.handle('get-downloads', () => {
 });
 
 ipcMain.handle('open-download', (event, savePath) => {
+  if (!requireTrustedInternalSender(event, 'open-download', ['index.html'])) return false;
+  if (!isKnownDownloadPath(savePath, downloads)) return false;
   const { shell } = require('electron');
-  shell.openPath(savePath);
+  return shell.openPath(savePath);
 });
 
 ipcMain.handle('show-download-in-folder', (event, savePath) => {
+  if (!requireTrustedInternalSender(event, 'show-download-in-folder', ['index.html'])) return false;
+  if (!isKnownDownloadPath(savePath, downloads)) return false;
   const { shell } = require('electron');
   shell.showItemInFolder(savePath);
+  return true;
 });
 
 ipcMain.handle('clear-downloads', () => {
@@ -2500,7 +2522,8 @@ async function nukeEverything() {
 }
 
 // IPC handler for nuke
-ipcMain.handle('nuke-browser-data', async () => {
+ipcMain.handle('nuke-browser-data', async (event) => {
+  if (!requireTrustedInternalSender(event, 'nuke-browser-data', ['index.html'])) return false;
   try {
     console.log('[NUKE] IPC handler called');
     const result = await nukeEverything();
@@ -2513,7 +2536,8 @@ ipcMain.handle('nuke-browser-data', async () => {
 });
 
 // IPC handler for closing the browser
-ipcMain.handle('close-browser', async () => {
+ipcMain.handle('close-browser', async (event) => {
+  if (!requireTrustedInternalSender(event, 'close-browser', ['index.html'])) return false;
   try {
     // DON'T save anything if nuke was triggered - we just deleted everything!
     if (!nukeInProgress) {

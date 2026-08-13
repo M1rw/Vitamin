@@ -13,7 +13,9 @@
     "build:all": "electron-builder --mac dmg --linux deb --win",
     "protect": "node scripts/obfuscate.js build",
     "restore": "node scripts/obfuscate.js restore",
-    "build:protected": "npm run protect && npm run build:all && npm run restore"
+    "build:protected": "npm run protect && npm run build:all && npm run restore",
+    "test:ipc": "node --test test/ipc-guards.test.mjs",
+    "check:ipc": "node --check main.js && node --check preload.js && node --check preload-start.js && node --check ipc-guards.js"
   },
   "keywords": [
     "privacy",
