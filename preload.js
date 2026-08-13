@@ -20,6 +20,12 @@ contextBridge.exposeInMainWorld('vitamin', {
   closeOtherTabs: (tabId) => ipcRenderer.send('close-other-tabs', tabId),
   closeTabsToRight: (tabId) => ipcRenderer.send('close-tabs-to-right', tabId),
 
+  // Local workspaces
+  getWorkspaces: () => ipcRenderer.invoke('get-workspaces'),
+  createWorkspace: (input) => ipcRenderer.invoke('create-workspace', input),
+  switchWorkspace: (workspaceId) => ipcRenderer.send('switch-workspace', workspaceId),
+  deleteWorkspace: (workspaceId) => ipcRenderer.invoke('delete-workspace', workspaceId),
+
   // Poisoning
   togglePoison: (enabled) => ipcRenderer.send('toggle-poison', enabled),
   getPoisonLog: () => ipcRenderer.invoke('get-poison-log'),
@@ -131,6 +137,7 @@ contextBridge.exposeInMainWorld('vitamin', {
   onLoadingStop: (callback) => ipcRenderer.on('loading-stop', () => callback()),
   onUrlChanged: (callback) => ipcRenderer.on('url-changed', (event, url) => callback(url)),
   onTabsUpdate: (callback) => ipcRenderer.on('tabs-update', (event, data) => callback(data)),
+  onWorkspacesUpdate: (callback) => ipcRenderer.on('workspaces-update', (event, data) => callback(data)),
   onPoisonActivity: (callback) => ipcRenderer.on('poison-activity', (event, activity) => callback(activity)),
   onPoisonStats: (callback) => ipcRenderer.on('poison-stats', (event, stats) => callback(stats)),
   onBlockedCount: (callback) => ipcRenderer.on('blocked-count', (event, count) => callback(count)),

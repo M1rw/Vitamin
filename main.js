@@ -9,6 +9,12 @@ const {
   parseHttpUrl,
   requireTrustedInternalSender,
 } = require('./ipc-guards');
+const {
+  DEFAULT_WORKSPACE,
+  createWorkspaceRecord,
+  getWorkspacePartition,
+  normalizeWorkspaceState,
+} = require('./workspaces');
 const { frequencies, getSearchTerms, getSites, getDelay, getPersonaList, getFrequencyList } = require('./poisonData');
 const fetch = require('cross-fetch');
 const os = require('os');
@@ -85,6 +91,7 @@ app.setName('Vitamin');
 const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const sessionPath = path.join(app.getPath('userData'), 'session.json');
 const customPersonasPath = path.join(app.getPath('userData'), 'custom-personas.json');
+const workspacesPath = path.join(app.getPath('userData'), 'workspaces.json');
 
 // Get performance metrics
 function getPerformanceMetrics() {
@@ -202,8 +209,9 @@ function loadSession() {
 function saveSession() {
   try {
     const sessionData = {
-      tabs: tabs.map(t => ({ url: t.url, title: t.title })),
-      activeTabId: activeTabId
+      tabs: tabs.map(t => ({ url: t.url, title: t.title, workspaceId: t.workspaceId })),
+      activeTabId: activeTabId,
+      activeWorkspaceId,
     };
     fs.writeFileSync(sessionPath, JSON.stringify(sessionData, null, 2));
     console.log(`Saved session with ${tabs.length} tabs`);
@@ -450,9 +458,13 @@ async function downloadAndCacheFavicon(url) {
   }
 }
 
-// Privacy hardening - apply to session
-function applyPrivacySettings() {
-  const ses = session.defaultSession;
+const privacyConfiguredSessions = new WeakSet();
+
+// Privacy hardening - apply consistently to default and workspace sessions.
+function applyPrivacySettings(targetSession = session.defaultSession) {
+  const ses = targetSession;
+  if (!ses || privacyConfiguredSessions.has(ses)) return;
+  privacyConfiguredSessions.add(ses);
 
   // Block third-party cookies
   if (settings.blockThirdPartyCookies) {
@@ -549,6 +561,76 @@ let tabs = []; // Array of { id, title, url }
 let tabViews = new Map(); // Map<tabId, BrowserView>
 let activeTabId = null;
 let nextTabId = 1;
+let workspaces = [{ ...DEFAULT_WORKSPACE }];
+let activeWorkspaceId = DEFAULT_WORKSPACE.id;
+
+function loadWorkspaces() {
+  try {
+    const data = fs.existsSync(workspacesPath) ? JSON.parse(fs.readFileSync(workspacesPath, 'utf8')) : null;
+    const state = normalizeWorkspaceState(data);
+    workspaces = state.workspaces;
+    activeWorkspaceId = state.activeWorkspaceId;
+  } catch (error) {
+    console.error('Failed to load workspaces:', error.message);
+    workspaces = [{ ...DEFAULT_WORKSPACE }];
+    activeWorkspaceId = DEFAULT_WORKSPACE.id;
+  }
+}
+
+function saveWorkspaces() {
+  try {
+    fs.writeFileSync(workspacesPath, JSON.stringify({ workspaces, activeWorkspaceId }, null, 2));
+  } catch (error) {
+    console.error('Failed to save workspaces:', error.message);
+  }
+}
+
+function getWorkspace(workspaceId) {
+  return workspaces.find((workspace) => workspace.id === workspaceId) || null;
+}
+
+function getWorkspaceSession(workspaceId) {
+  const partition = getWorkspacePartition(workspaceId);
+  const workspaceSession = partition ? session.fromPartition(partition) : session.defaultSession;
+  applyPrivacySettings(workspaceSession);
+  if (settings.adBlockEnabled) adblockModule.enableInSession(workspaceSession);
+  return workspaceSession;
+}
+
+function getTabsInWorkspace(workspaceId = activeWorkspaceId) {
+  return tabs.filter((tab) => tab.workspaceId === workspaceId);
+}
+
+function sendWorkspacesUpdate() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('workspaces-update', {
+    workspaces: workspaces.map((workspace) => ({
+      ...workspace,
+      tabCount: getTabsInWorkspace(workspace.id).length,
+    })),
+    activeWorkspaceId,
+  });
+}
+
+function switchWorkspace(workspaceId) {
+  if (!getWorkspace(workspaceId)) return false;
+  if (workspaceId === activeWorkspaceId) return true;
+
+  const currentView = getActiveView();
+  if (currentView && mainWindow) mainWindow.removeBrowserView(currentView);
+  activeWorkspaceId = workspaceId;
+  saveWorkspaces();
+
+  const workspaceTab = getTabsInWorkspace(workspaceId)[0];
+  if (workspaceTab) {
+    switchToTab(workspaceTab.id);
+  } else {
+    createTab(null, workspaceId);
+  }
+
+  sendWorkspacesUpdate();
+  return true;
+}
 
 function createWindow() {
   // Get screen dimensions to center the window
@@ -601,9 +683,15 @@ function createWindow() {
 
       // Initialize ad blocker in background after window is shown
       setTimeout(() => {
-        adblockModule.init().catch(err => {
-          console.error('Failed to initialize ad blocker in background:', err.message);
-        });
+        adblockModule.init()
+          .then(() => {
+            if (settings.adBlockEnabled) {
+              workspaces.forEach((workspace) => adblockModule.enableInSession(getWorkspaceSession(workspace.id)));
+            }
+          })
+          .catch(err => {
+            console.error('Failed to initialize ad blocker in background:', err.message);
+          });
       }, 100);
     }
   });
@@ -617,7 +705,8 @@ function createWindow() {
     if (savedSession && savedSession.tabs && savedSession.tabs.length > 0) {
       savedSession.tabs.forEach((tab, index) => {
         const url = tab.url && !tab.url.startsWith('file://') ? tab.url : null;
-        createTab(url);
+        const workspaceId = getWorkspace(tab.workspaceId) ? tab.workspaceId : DEFAULT_WORKSPACE.id;
+        createTab(url, workspaceId);
       });
       restoredSession = true;
       console.log(`Restored session with ${savedSession.tabs.length} tabs`);
@@ -758,14 +847,15 @@ function updateActiveTabBounds() {
   });
 }
 
-function createTab(url = null) {
+function createTab(url = null, requestedWorkspaceId = activeWorkspaceId) {
+  const workspaceId = getWorkspace(requestedWorkspaceId) ? requestedWorkspaceId : DEFAULT_WORKSPACE.id;
   const tabId = nextTabId++;
   const view = new BrowserView({
     webPreferences: {
       preload: path.join(__dirname, 'preload-start.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      session: session.defaultSession  // Ensure we use the default session where request handlers are registered
+      session: getWorkspaceSession(workspaceId),
     },
     backgroundColor: '#0a0a0a'
   });
@@ -775,7 +865,8 @@ function createTab(url = null) {
     id: tabId,
     title: 'New Tab',
     url: '',
-    favicon: ''
+    favicon: '',
+    workspaceId,
   };
   tabs.push(tab);
   tabViews.set(tabId, view);
@@ -1086,8 +1177,8 @@ function createTab(url = null) {
     });
   }
 
-  // Switch to new tab
-  switchToTab(tabId);
+  // Switch to a new tab only when it belongs to the visible workspace.
+  if (workspaceId === activeWorkspaceId) switchToTab(tabId);
 
   // Send theme change immediately to ensure it's applied
   setTimeout(() => {
@@ -1102,6 +1193,9 @@ function createTab(url = null) {
 function switchToTab(tabId) {
   const view = tabViews.get(tabId);
   if (!view || view.webContents.isDestroyed()) return;
+
+  const workspaceTab = tabs.find(t => t.id === tabId);
+  if (!workspaceTab || workspaceTab.workspaceId !== activeWorkspaceId) return;
 
   activeTabId = tabId;
   mainWindow.setBrowserView(view);
@@ -1147,15 +1241,19 @@ function switchToTab(tabId) {
 function closeTab(tabId) {
   const index = tabs.findIndex(t => t.id === tabId);
   if (index === -1) return;
+  const tab = tabs[index];
+  if (tab.workspaceId !== activeWorkspaceId) return;
+  const workspaceTabs = getTabsInWorkspace(tab.workspaceId);
+  const workspaceIndex = workspaceTabs.findIndex((workspaceTab) => workspaceTab.id === tabId);
 
-  // Don't close last tab - create new one instead
-  if (tabs.length === 1) {
+  // Keep one tab available in each workspace.
+  if (workspaceTabs.length === 1) {
     // Reset current tab to start page
     const view = tabViews.get(tabId);
     if (view) {
       view.webContents.loadFile('html/start.html');
-      tabs[0].title = 'New Tab';
-      tabs[0].url = '';
+      tab.title = 'New Tab';
+      tab.url = '';
       sendTabsUpdate();
       // Apply theme and version after page loads
       view.webContents.once('dom-ready', () => {
@@ -1206,21 +1304,22 @@ function closeTab(tabId) {
 
   // Switch to adjacent tab if this was active
   if (tabId === activeTabId) {
-    const newIndex = Math.min(index, tabs.length - 1);
-    const newTabId = tabs[newIndex].id;
+    const remainingWorkspaceTabs = getTabsInWorkspace(tab.workspaceId);
+    const newIndex = Math.min(workspaceIndex, remainingWorkspaceTabs.length - 1);
+    const newTabId = remainingWorkspaceTabs[newIndex]?.id;
     // Verify the new tab view exists and is not destroyed before switching
     const newView = tabViews.get(newTabId);
     if (newView && !newView.webContents.isDestroyed()) {
       switchToTab(newTabId);
     } else {
       // If the new view is destroyed or doesn't exist, try to find any valid tab
-      const validTab = tabs.find(t => {
+      const validTab = remainingWorkspaceTabs.find(t => {
         const tabView = tabViews.get(t.id);
         return tabView && !tabView.webContents.isDestroyed();
       });
       if (validTab) {
         switchToTab(validTab.id);
-      } else if (tabs.length > 0) {
+      } else if (remainingWorkspaceTabs.length > 0) {
         // Create a new tab if no valid tabs exist
         createTab();
       }
@@ -1233,9 +1332,10 @@ function closeTab(tabId) {
 function sendTabsUpdate() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('tabs-update', {
-    tabs: tabs.map(t => ({ id: t.id, title: t.title, favicon: t.favicon })),
+    tabs: getTabsInWorkspace().map(t => ({ id: t.id, title: t.title, favicon: t.favicon, workspaceId: t.workspaceId })),
     activeTabId
   });
+  sendWorkspacesUpdate();
 }
 
 function getActiveView() {
@@ -1443,23 +1543,27 @@ ipcMain.on('go-home', () => {
 });
 
 // Tab handlers
-ipcMain.on('create-tab', () => {
+ipcMain.on('create-tab', (event) => {
+  if (!requireTrustedInternalSender(event, 'create-tab', ['index.html'])) return;
   createTab();
 });
 
 ipcMain.on('close-tab', (event, tabId) => {
+  if (!requireTrustedInternalSender(event, 'close-tab', ['index.html']) || !Number.isInteger(tabId)) return;
   closeTab(tabId);
 });
 
 ipcMain.on('switch-tab', (event, tabId) => {
+  if (!requireTrustedInternalSender(event, 'switch-tab', ['index.html']) || !Number.isInteger(tabId)) return;
   switchToTab(tabId);
 });
 
 // Duplicate tab
 ipcMain.on('duplicate-tab', (event, tabId) => {
+  if (!requireTrustedInternalSender(event, 'duplicate-tab', ['index.html']) || !Number.isInteger(tabId)) return;
   const tab = tabs.find(t => t.id === tabId);
-  if (tab) {
-    const newTabId = createTab(tab.url);
+  if (tab && tab.workspaceId === activeWorkspaceId) {
+    const newTabId = createTab(tab.url, tab.workspaceId);
     // Set the title and favicon once the page loads
     const newView = tabViews.get(newTabId);
     if (newView) {
@@ -1481,20 +1585,71 @@ ipcMain.on('duplicate-tab', (event, tabId) => {
 
 // Close other tabs
 ipcMain.on('close-other-tabs', (event, tabId) => {
+  if (!requireTrustedInternalSender(event, 'close-other-tabs', ['index.html']) || !Number.isInteger(tabId)) return;
   // Close all tabs except the specified one
-  const tabsToClose = tabs.filter(t => t.id !== tabId);
+  const tabsToClose = getTabsInWorkspace().filter(t => t.id !== tabId);
   tabsToClose.forEach(t => closeTab(t.id));
 });
 
 // Close tabs to the right
 ipcMain.on('close-tabs-to-right', (event, tabId) => {
-  // Find the index of the specified tab
-  const tabIndex = tabs.findIndex(t => t.id === tabId);
+  if (!requireTrustedInternalSender(event, 'close-tabs-to-right', ['index.html']) || !Number.isInteger(tabId)) return;
+  const workspaceTabs = getTabsInWorkspace();
+  // Find the index of the specified tab in the current workspace.
+  const tabIndex = workspaceTabs.findIndex(t => t.id === tabId);
   if (tabIndex !== -1) {
-    // Close all tabs to the right of this tab
-    const tabsToClose = tabs.slice(tabIndex + 1);
+    const tabsToClose = workspaceTabs.slice(tabIndex + 1);
     tabsToClose.forEach(t => closeTab(t.id));
   }
+});
+
+// Local workspaces are persisted tab contexts with dedicated Electron sessions.
+ipcMain.handle('get-workspaces', (event) => {
+  if (!requireTrustedInternalSender(event, 'get-workspaces', ['index.html'])) return { workspaces: [], activeWorkspaceId: null };
+  return {
+    workspaces: workspaces.map((workspace) => ({ ...workspace, tabCount: getTabsInWorkspace(workspace.id).length })),
+    activeWorkspaceId,
+  };
+});
+
+ipcMain.handle('create-workspace', (event, input) => {
+  if (!requireTrustedInternalSender(event, 'create-workspace', ['index.html'])) return { ok: false, error: 'untrusted-sender' };
+  const workspace = createWorkspaceRecord(input, workspaces);
+  if (!workspace) return { ok: false, error: 'invalid-workspace' };
+
+  workspaces.push(workspace);
+  saveWorkspaces();
+  switchWorkspace(workspace.id);
+  return { ok: true, workspace };
+});
+
+ipcMain.on('switch-workspace', (event, workspaceId) => {
+  if (!requireTrustedInternalSender(event, 'switch-workspace', ['index.html']) || typeof workspaceId !== 'string') return;
+  switchWorkspace(workspaceId);
+});
+
+ipcMain.handle('delete-workspace', async (event, workspaceId) => {
+  if (!requireTrustedInternalSender(event, 'delete-workspace', ['index.html']) || typeof workspaceId !== 'string' || workspaceId === DEFAULT_WORKSPACE.id) {
+    return { ok: false, error: 'invalid-workspace' };
+  }
+  const workspace = getWorkspace(workspaceId);
+  if (!workspace) return { ok: false, error: 'not-found' };
+
+  if (workspaceId === activeWorkspaceId) switchWorkspace(DEFAULT_WORKSPACE.id);
+  for (const tab of getTabsInWorkspace(workspaceId)) {
+    const view = tabViews.get(tab.id);
+    if (view && !view.webContents.isDestroyed()) view.webContents.destroy();
+    tabViews.delete(tab.id);
+  }
+  tabs = tabs.filter((tab) => tab.workspaceId !== workspaceId);
+  workspaces = workspaces.filter((item) => item.id !== workspaceId);
+  saveWorkspaces();
+
+  const workspaceSession = session.fromPartition(getWorkspacePartition(workspaceId));
+  await workspaceSession.clearStorageData();
+  await workspaceSession.clearCache();
+  sendTabsUpdate();
+  return { ok: true };
 });
 
 // Settings panel - shrink browser view to make room
@@ -2103,6 +2258,7 @@ ipcMain.handle('check-for-updates', async () => {
 app.whenReady().then(async () => {
   // Load settings before creating window
   loadSettings();
+  loadWorkspaces();
 
   // Set native theme so websites respect light/dark preference on startup
   nativeTheme.themeSource = (settings.theme === 'light') ? 'light' : 'dark';

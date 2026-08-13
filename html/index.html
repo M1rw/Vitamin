@@ -300,6 +300,52 @@
       flex-shrink: 0;
     }
 
+    /* Local workspaces keep tabs and session storage organized by context. */
+    .workspace-control {
+      position: relative;
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+    }
+
+    .workspace-button {
+      height: 36px;
+      max-width: 142px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .workspace-button:hover,
+    .workspace-button[aria-expanded="true"] {
+      border-color: var(--accent);
+      background: var(--bg-tertiary);
+    }
+
+    .workspace-name { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .workspace-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+    .workspace-dot.blueberry { background: #4a90d9; }
+    .workspace-dot.acai { background: #9b59b6; }
+    .workspace-dot.emerald { background: #2ecc71; }
+    .workspace-menu { display: none; position: absolute; z-index: 10001; top: calc(100% + 8px); left: 0; min-width: 230px; padding: 6px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-secondary); box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28); }
+    .workspace-menu.open { display: block; }
+    .workspace-menu-label { display: block; padding: 7px 8px 5px; color: var(--text-muted); font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; }
+    .workspace-item, .workspace-create, .workspace-delete { width: 100%; display: flex; align-items: center; border: none; background: transparent; color: var(--text-primary); cursor: pointer; border-radius: 7px; font-size: 11px; text-align: left; }
+    .workspace-item { gap: 8px; padding: 8px; }
+    .workspace-item:hover, .workspace-item.active { background: var(--bg-tertiary); }
+    .workspace-item-name { flex: 1; }
+    .workspace-item-count { color: var(--text-muted); font-size: 10px; }
+    .workspace-create { gap: 7px; padding: 9px 8px 7px; margin-top: 4px; border-top: 1px solid var(--border); color: var(--accent); font-weight: 600; }
+    .workspace-delete { padding: 7px 8px; margin-top: 1px; color: #ff7777; font-size: 10px; }
+    .workspace-delete:hover { background: rgba(255, 100, 100, 0.1); }
+
     .url-container {
       flex: 1;
       -webkit-app-region: no-drag;
@@ -3225,6 +3271,15 @@
       </button>
     </div>
 
+    <div class="workspace-control">
+      <button class="workspace-button" id="workspace-button" aria-expanded="false" aria-controls="workspace-menu" title="Switch workspace">
+        <span class="workspace-dot" id="workspace-dot"></span>
+        <span class="workspace-name" id="workspace-name">Personal</span>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <div class="workspace-menu" id="workspace-menu" role="menu" aria-label="Local workspaces"></div>
+    </div>
+
     <div class="tab-container">
       <button class="new-tab-btn" id="new-tab-btn" title="New Tab (⌘T)">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -3907,6 +3962,11 @@ https://www.coindesk.com"></textarea>
     const tabBar = document.getElementById('tab-bar');
     const newTabBtn = document.getElementById('new-tab-btn');
     const closeTabBtn = document.getElementById('close-tab-btn');
+    const workspaceButton = document.getElementById('workspace-button');
+    const workspaceMenu = document.getElementById('workspace-menu');
+    const workspaceName = document.getElementById('workspace-name');
+    const workspaceDot = document.getElementById('workspace-dot');
+    let currentWorkspaceData = { workspaces: [], activeWorkspaceId: 'personal' };
 
     backBtn.addEventListener('click', () => window.vitamin.goBack());
     forwardBtn.addEventListener('click', () => window.vitamin.goForward());
@@ -3984,6 +4044,82 @@ https://www.coindesk.com"></textarea>
         activeTab.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
       }
     }
+
+    function closeWorkspaceMenu() {
+      workspaceMenu.classList.remove('open');
+      workspaceButton.setAttribute('aria-expanded', 'false');
+    }
+
+    function renderWorkspaces(data) {
+      currentWorkspaceData = data;
+      const activeWorkspace = data.workspaces.find((workspace) => workspace.id === data.activeWorkspaceId) || data.workspaces[0];
+      if (!activeWorkspace) return;
+
+      workspaceName.textContent = activeWorkspace.name;
+      workspaceDot.className = `workspace-dot ${activeWorkspace.color || ''}`;
+      workspaceMenu.replaceChildren();
+
+      const label = document.createElement('span');
+      label.className = 'workspace-menu-label';
+      label.textContent = 'Local workspaces';
+      workspaceMenu.appendChild(label);
+
+      data.workspaces.forEach((workspace) => {
+        const item = document.createElement('button');
+        item.className = `workspace-item ${workspace.id === data.activeWorkspaceId ? 'active' : ''}`;
+        item.type = 'button';
+        item.setAttribute('role', 'menuitem');
+        item.innerHTML = `<span class="workspace-dot ${escapeHtml(workspace.color || '')}"></span><span class="workspace-item-name"></span><span class="workspace-item-count"></span>`;
+        item.querySelector('.workspace-item-name').textContent = workspace.name;
+        item.querySelector('.workspace-item-count').textContent = `${workspace.tabCount || 0} tab${workspace.tabCount === 1 ? '' : 's'}`;
+        item.addEventListener('click', () => {
+          window.vitamin.switchWorkspace(workspace.id);
+          closeWorkspaceMenu();
+        });
+        workspaceMenu.appendChild(item);
+      });
+
+      const create = document.createElement('button');
+      create.className = 'workspace-create';
+      create.type = 'button';
+      create.textContent = '+ Create local workspace';
+      create.addEventListener('click', async () => {
+        const name = window.prompt('Name this local workspace (max 32 characters):');
+        if (name === null) return;
+        const colors = ['orange', 'blueberry', 'acai', 'emerald'];
+        const color = colors[data.workspaces.length % colors.length];
+        const result = await window.vitamin.createWorkspace({ name, color });
+        if (!result?.ok) window.alert('That workspace name is unavailable or invalid.');
+        closeWorkspaceMenu();
+      });
+      workspaceMenu.appendChild(create);
+
+      if (activeWorkspace.id !== 'personal') {
+        const remove = document.createElement('button');
+        remove.className = 'workspace-delete';
+        remove.type = 'button';
+        remove.textContent = 'Delete this workspace and its local data';
+        remove.addEventListener('click', async () => {
+          if (!window.confirm(`Delete “${activeWorkspace.name}” and clear its session storage? This cannot be undone.`)) return;
+          await window.vitamin.deleteWorkspace(activeWorkspace.id);
+          closeWorkspaceMenu();
+        });
+        workspaceMenu.appendChild(remove);
+      }
+    }
+
+    workspaceButton.addEventListener('click', () => {
+      const opening = !workspaceMenu.classList.contains('open');
+      workspaceMenu.classList.toggle('open', opening);
+      workspaceButton.setAttribute('aria-expanded', String(opening));
+    });
+
+    document.addEventListener('click', (event) => {
+      if (!event.target.closest('.workspace-control')) closeWorkspaceMenu();
+    });
+
+    window.vitamin.getWorkspaces().then(renderWorkspaces);
+    window.vitamin.onWorkspacesUpdate(renderWorkspaces);
 
     // Tab context menu
     function showTabContextMenu(tabId, x, y) {

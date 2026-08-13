@@ -13,7 +13,13 @@
 ## Advanced browser cycle
 
 - [ ] Push the IPC boundary hardening commit to the connected GitHub repository.
-- [ ] Audit existing privacy, tab, download, and session-management capabilities for the next feature increment.
-- [ ] Implement a practical advanced workspace capability with validated IPC access.
-- [ ] Add regression coverage and run local source-level verification for the new capability.
+- [x] Audit existing privacy, tab, download, and session-management capabilities for the next feature increment.
+- [x] Implement a practical advanced workspace capability with validated IPC access.
+- [x] Add regression coverage and run local source-level verification for the new capability.
 - [ ] Push the advanced-browser feature commit to the connected GitHub repository.
+
+## Next architecture milestones
+
+- [ ] Migrate the tab-view layer from deprecated BrowserView to WebContentsView with desktop runtime regression coverage.
+- [ ] Add tab suspension and a local workspace performance ledger.
+- [ ] Add tab groups, pinning, and keyboard command search with validated IPC methods.

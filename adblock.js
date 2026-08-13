@@ -10,6 +10,7 @@ let blockedCount = 0;
 let adBlockerInitInProgress = false;
 let blockerListenerAttached = false;
 let adBlockingEnabled = false;
+const enabledSessions = new Set();
 
 // Callbacks set by main.js
 let getSettings = null;
@@ -113,13 +114,7 @@ async function updateCache() {
 function enable() {
   if (!blocker) return;
 
-  if (adBlockingEnabled) {
-    console.log('Ad blocking already enabled, skipping');
-    return;
-  }
-
-  const ses = session.defaultSession;
-  blocker.enableBlockingInSession(ses);
+  enableInSession(session.defaultSession);
 
   // Add custom exception rules to prevent website breakage
   try {
@@ -149,11 +144,19 @@ function enable() {
   console.log('Ad blocking enabled');
 }
 
+function enableInSession(ses) {
+  if (!blocker || !ses || enabledSessions.has(ses)) return;
+  blocker.enableBlockingInSession(ses);
+  enabledSessions.add(ses);
+}
+
 function disable() {
   if (!blocker) return;
 
-  const ses = session.defaultSession;
-  blocker.disableBlockingInSession(ses);
+  for (const ses of enabledSessions) {
+    blocker.disableBlockingInSession(ses);
+  }
+  enabledSessions.clear();
   adBlockingEnabled = false;
   console.log('Ad blocking disabled');
 }
@@ -184,6 +187,7 @@ module.exports = {
   configure,
   init,
   enable,
+  enableInSession,
   disable,
   isEnabled,
   getBlockedCount,
