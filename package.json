@@ -157,6 +157,7 @@
       "workspaces.js",
       "tab-performance.js",
       "tab-groups.js",
+      "tab-recovery.js",
       "privacy-ledger.js",
       "reader-mode.js",
       "navigation-policy.js",
