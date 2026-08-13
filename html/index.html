@@ -264,6 +264,7 @@
     .tab.pinned { min-width: 36px; max-width: 36px; padding: 0 6px; gap: 0; }
     .tab.pinned .tab-title { display: none; }
     .tab-pinned-marker { color: var(--accent); font-size: 10px; line-height: 1; }
+    .tab-reader-marker { color: #a787e6; font-size: 10px; line-height: 1; }
     .tab-group-marker { width: 3px; height: 14px; border-radius: 99px; background: var(--tab-group-color, var(--accent)); flex-shrink: 0; }
     .tab-group-marker.blueberry { background: #4a90d9; }
     .tab-group-marker.acai { background: #9b59b6; }
@@ -3354,6 +3355,12 @@
       <span id="poison-label">Poison</span>
     </button>
 
+    <button class="toolbar-btn" id="reader-btn" title="Toggle Reader Mode" style="-webkit-app-region: no-drag;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/>
+      </svg>
+    </button>
+
     <button class="toolbar-btn" id="privacy-btn" title="Local Privacy Ledger" style="-webkit-app-region: no-drag;">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>
@@ -4056,6 +4063,7 @@ https://www.coindesk.com"></textarea>
     const commandOverlay = document.getElementById('command-overlay');
     const commandInput = document.getElementById('command-input');
     const commandResults = document.getElementById('command-results');
+    const readerBtn = document.getElementById('reader-btn');
     const privacyBtn = document.getElementById('privacy-btn');
     const privacyOverlay = document.getElementById('privacy-overlay');
     const privacyClose = document.getElementById('privacy-close');
@@ -4133,6 +4141,7 @@ https://www.coindesk.com"></textarea>
           ${faviconHtml}
           <span class="tab-title">${escapeHtml(title)}</span>
           ${tab.pinned ? '<span class="tab-pinned-marker" title="Pinned tab">◆</span>' : ''}
+          ${tab.readerMode ? '<span class="tab-reader-marker" title="Reader mode">▤</span>' : ''}
           ${tab.suspended ? '<span class="tab-suspended-marker" title="Parked to reduce background activity">◦</span>' : ''}
         `;
 
@@ -4187,6 +4196,7 @@ https://www.coindesk.com"></textarea>
         { section: 'Actions', icon: '⌁', label: 'Park background tabs', meta: 'Current workspace', run: () => window.vitamin.suspendBackgroundTabs() },
         { section: 'Actions', icon: '◆', label: activeTab?.pinned ? 'Unpin active tab' : 'Pin active tab', meta: 'Tab protection', run: () => activeTab && window.vitamin.toggleTabPin(activeTab.id) },
         { section: 'Actions', icon: '◫', label: 'Create group from active tab', meta: 'Organization', run: () => activeTab && createGroupForTab(activeTab.id) },
+        { section: 'Actions', icon: '▤', label: activeTab?.readerMode ? 'Leave reader mode' : 'Open reader mode', meta: 'Eligible HTTPS pages', run: () => activeTab && window.vitamin.toggleReaderMode(activeTab.id) },
         { section: 'Actions', icon: '◈', label: 'Open local privacy ledger', meta: 'Site rules', run: () => openPrivacyLedger() },
       ];
 
@@ -4247,6 +4257,10 @@ https://www.coindesk.com"></textarea>
     }
 
     commandBtn.addEventListener('click', openCommandCenter);
+    readerBtn.addEventListener('click', async () => {
+      const result = await window.vitamin.toggleReaderMode(currentActiveTabId);
+      if (!result?.ok) window.alert('Reader mode needs an eligible HTTPS page with enough readable text.');
+    });
     commandInput.addEventListener('input', () => {
       commandIndex = 0;
       renderCommandEntries();
@@ -4514,6 +4528,9 @@ https://www.coindesk.com"></textarea>
         <div class="context-menu-item" data-action="suspend-tab">
           <span>Park Background Tab</span>
         </div>
+        <div class="context-menu-item" data-action="toggle-reader">
+          <span>${tabData?.readerMode ? 'Leave Reader Mode' : 'Open Reader Mode'}</span>
+        </div>
         <div class="context-menu-item" data-action="toggle-pin">
           <span>${tabData?.pinned ? 'Unpin Tab' : 'Pin Tab'}</span>
         </div>
@@ -4551,6 +4568,9 @@ https://www.coindesk.com"></textarea>
               break;
             case 'suspend-tab':
               window.vitamin.suspendTab(tabId);
+              break;
+            case 'toggle-reader':
+              await window.vitamin.toggleReaderMode(tabId);
               break;
             case 'toggle-pin':
               await window.vitamin.toggleTabPin(tabId);

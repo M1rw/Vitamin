@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('vitamin', {
   getWorkspaceLedger: (workspaceId) => ipcRenderer.invoke('get-workspace-ledger', workspaceId),
   suspendBackgroundTabs: () => ipcRenderer.invoke('suspend-background-tabs'),
   suspendTab: (tabId) => ipcRenderer.invoke('suspend-tab', tabId),
+  toggleReaderMode: (tabId) => ipcRenderer.invoke('toggle-reader-mode', tabId),
   getTabGroups: () => ipcRenderer.invoke('get-tab-groups'),
   createTabGroup: (input) => ipcRenderer.invoke('create-tab-group', input),
   assignTabGroup: (tabId, groupId) => ipcRenderer.invoke('assign-tab-group', tabId, groupId),

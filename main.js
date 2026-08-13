@@ -18,6 +18,8 @@ const {
 const { canSuspendTab, summarizeWorkspaceLedger } = require('./tab-performance');
 const { createGroupRecord, normalizeGroups, normalizeTabOrganization } = require('./tab-groups');
 const { SUPPORTED_PERMISSIONS, getRule, normalizeLedger, normalizeOrigin, normalizeRules, upsertRule } = require('./privacy-ledger');
+const { buildReaderModeScript, isReaderEligible } = require('./reader-mode');
+const { parseHttpsUrl, shouldAllowPageNavigation, shouldCreateInternalTab } = require('./navigation-policy');
 const { frequencies, getSearchTerms, getSites, getDelay, getPersonaList, getFrequencyList } = require('./poisonData');
 const fetch = require('cross-fetch');
 const os = require('os');
@@ -1016,10 +1018,17 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId, restore
     workspaceId,
     suspended: false,
     suspendedUrl: '',
+    readerMode: false,
     ...normalizeTabOrganization({ ...restoredState, workspaceId }, tabGroups),
   };
   tabs.push(tab);
   tabViews.set(tabId, view);
+
+  view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    const safeUrl = shouldCreateInternalTab(targetUrl) ? parseHttpsUrl(targetUrl) : null;
+    if (safeUrl) queueMicrotask(() => createTab(safeUrl, workspaceId));
+    return { action: 'deny' };
+  });
 
   // Apply performance mode if enabled
   if (settings.performanceMode) {
@@ -1040,9 +1049,12 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId, restore
 
   // Intercept navigation to Palantir URLs BEFORE they happen
   let handlingPalantir = false;
-  view.webContents.on('will-navigate', (event, url) => {
-    // Skip internal file:// URLs to avoid loops
-    if (url.startsWith('file://')) return;
+  view.webContents.on('will-navigate', (event, details) => {
+    const url = typeof details === 'string' ? details : details?.url;
+    if (!shouldAllowPageNavigation(url)) {
+      event.preventDefault();
+      return;
+    }
     // Prevent re-entry while handling
     if (handlingPalantir) return;
 
@@ -1057,12 +1069,18 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId, restore
     }
   });
 
+  view.webContents.on('will-redirect', (event, details) => {
+    const redirectUrl = typeof details === 'string' ? details : details?.url;
+    if (!shouldAllowPageNavigation(redirectUrl)) event.preventDefault();
+  });
+
 
   // Set up navigation listeners for this tab
   view.webContents.on('did-navigate', (event, url) => {
     // about:blank is used only while a tab is intentionally suspended.
     if (tab.suspended && url === 'about:blank') return;
     tab.url = url;
+    tab.readerMode = false;
     const displayUrl = url.startsWith('file://') ? '' : url;
 
     // Update title from page (getTitle returns string, not promise)
@@ -1110,6 +1128,7 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId, restore
   view.webContents.on('did-navigate-in-page', (event, url) => {
     if (tab.suspended && url === 'about:blank') return;
     tab.url = url;
+    tab.readerMode = false;
     const displayUrl = url.startsWith('file://') ? '' : url;
     if (tabId === activeTabId) {
       mainWindow.webContents.send('url-changed', displayUrl);
@@ -1501,7 +1520,7 @@ function closeTab(tabId) {
 function sendTabsUpdate() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('tabs-update', {
-    tabs: getTabsInWorkspace().map(t => ({ id: t.id, title: t.title, favicon: t.favicon, workspaceId: t.workspaceId, suspended: Boolean(t.suspended), pinned: Boolean(t.pinned), groupId: t.groupId })),
+    tabs: getTabsInWorkspace().map(t => ({ id: t.id, title: t.title, favicon: t.favicon, workspaceId: t.workspaceId, suspended: Boolean(t.suspended), readerMode: Boolean(t.readerMode), pinned: Boolean(t.pinned), groupId: t.groupId })),
     tabGroups: getTabGroupsInWorkspace(),
     activeTabId
   });
@@ -1842,6 +1861,31 @@ ipcMain.handle('suspend-background-tabs', (event) => {
 ipcMain.handle('suspend-tab', (event, tabId) => {
   if (!requireTrustedInternalSender(event, 'suspend-tab', ['index.html']) || !Number.isInteger(tabId)) return false;
   return suspendTab(tabId);
+});
+
+ipcMain.handle('toggle-reader-mode', async (event, tabId) => {
+  if (!requireTrustedInternalSender(event, 'toggle-reader-mode', ['index.html']) || !Number.isInteger(tabId)) return { ok: false, active: false };
+  const tab = tabs.find((item) => item.id === tabId);
+  const view = tabViews.get(tabId);
+  if (!tab || tab.workspaceId !== activeWorkspaceId || !view || view.webContents.isDestroyed() || tab.suspended || !isReaderEligible(tab.url)) {
+    return { ok: false, active: false };
+  }
+  if (tab.readerMode) {
+    tab.readerMode = false;
+    view.webContents.reload();
+    sendTabsUpdate();
+    return { ok: true, active: false };
+  }
+  try {
+    const transformed = await view.webContents.executeJavaScript(buildReaderModeScript(), true);
+    if (!transformed) return { ok: false, active: false };
+    tab.readerMode = true;
+    sendTabsUpdate();
+    return { ok: true, active: true };
+  } catch (error) {
+    console.warn('[READER] Unable to enable local reader mode:', error.message);
+    return { ok: false, active: false };
+  }
 });
 
 ipcMain.handle('get-tab-groups', (event) => {

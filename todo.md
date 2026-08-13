@@ -53,3 +53,11 @@
 - [x] Add browser controls to inspect, revoke, and clear local privacy records.
 - [x] Add regression coverage and run source-level verification.
 - [x] Push the verified privacy-ledger increment to the connected GitHub repository.
+
+## Reader and navigation resilience cycle
+
+- [x] Map current navigation, new-window, and per-tab script lifecycle behavior.
+- [x] Implement reversible local reader mode with a per-tab state boundary.
+- [x] Add explicit external-navigation and new-window policy controls.
+- [x] Add regression coverage and run source-level verification.
+- [x] Push the verified reader and navigation increment to the connected GitHub repository.
