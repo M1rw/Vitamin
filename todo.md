@@ -29,11 +29,19 @@
 - [x] Map the current tab lifecycle and identify safe suspension and restoration boundaries.
 - [x] Implement a local workspace performance ledger and user-controlled tab suspension.
 - [x] Add suspension and metric regression tests, then run source-level verification.
-- [ ] Push the verified workspace performance increment to the connected GitHub repository.
+- [x] Push the verified workspace performance increment to the connected GitHub repository.
 
 ## WebContentsView migration cycle
 
 - [x] Map all BrowserView creation, attachment, resize, and teardown calls.
 - [x] Replace the tab-view layer with WebContentsView while preserving workspace and suspension behavior.
 - [x] Run source-level checks and document required desktop runtime migration tests.
-- [ ] Push the completed WebContentsView migration to the connected GitHub repository.
+- [x] Push the completed WebContentsView migration to the connected GitHub repository.
+
+## Tab organization cycle
+
+- [x] Map tab state and current renderer controls for group and pinning metadata.
+- [x] Implement persistent tab groups and pinning with validated IPC methods.
+- [ ] Implement keyboard command search for tabs, workspaces, and core browser actions.
+- [x] Add regression coverage and run source-level verification.
+- [x] Push the verified tab-organization increment to the connected GitHub repository.

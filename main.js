@@ -16,6 +16,7 @@ const {
   normalizeWorkspaceState,
 } = require('./workspaces');
 const { canSuspendTab, summarizeWorkspaceLedger } = require('./tab-performance');
+const { createGroupRecord, normalizeGroups, normalizeTabOrganization } = require('./tab-groups');
 const { frequencies, getSearchTerms, getSites, getDelay, getPersonaList, getFrequencyList } = require('./poisonData');
 const fetch = require('cross-fetch');
 const os = require('os');
@@ -93,6 +94,7 @@ const settingsPath = path.join(app.getPath('userData'), 'settings.json');
 const sessionPath = path.join(app.getPath('userData'), 'session.json');
 const customPersonasPath = path.join(app.getPath('userData'), 'custom-personas.json');
 const workspacesPath = path.join(app.getPath('userData'), 'workspaces.json');
+const tabGroupsPath = path.join(app.getPath('userData'), 'tab-groups.json');
 
 // Get performance metrics
 function getPerformanceMetrics() {
@@ -210,7 +212,7 @@ function loadSession() {
 function saveSession() {
   try {
     const sessionData = {
-      tabs: tabs.map(t => ({ url: t.url, title: t.title, workspaceId: t.workspaceId })),
+      tabs: tabs.map(t => ({ url: t.url, title: t.title, workspaceId: t.workspaceId, pinned: t.pinned, groupId: t.groupId })),
       activeTabId: activeTabId,
       activeWorkspaceId,
     };
@@ -564,6 +566,33 @@ let activeTabId = null;
 let nextTabId = 1;
 let workspaces = [{ ...DEFAULT_WORKSPACE }];
 let activeWorkspaceId = DEFAULT_WORKSPACE.id;
+let tabGroups = [];
+
+function loadTabGroups() {
+  try {
+    const data = fs.existsSync(tabGroupsPath) ? JSON.parse(fs.readFileSync(tabGroupsPath, 'utf8')) : [];
+    tabGroups = normalizeGroups(data, workspaces.map((workspace) => workspace.id));
+  } catch (error) {
+    console.error('Failed to load tab groups:', error.message);
+    tabGroups = [];
+  }
+}
+
+function saveTabGroups() {
+  try {
+    fs.writeFileSync(tabGroupsPath, JSON.stringify(tabGroups, null, 2));
+  } catch (error) {
+    console.error('Failed to save tab groups:', error.message);
+  }
+}
+
+function getTabGroup(groupId, workspaceId = activeWorkspaceId) {
+  return tabGroups.find((group) => group.id === groupId && group.workspaceId === workspaceId) || null;
+}
+
+function getTabGroupsInWorkspace(workspaceId = activeWorkspaceId) {
+  return tabGroups.filter((group) => group.workspaceId === workspaceId);
+}
 
 function loadWorkspaces() {
   try {
@@ -767,7 +796,7 @@ function createWindow() {
       savedSession.tabs.forEach((tab, index) => {
         const url = tab.url && !tab.url.startsWith('file://') ? tab.url : null;
         const workspaceId = getWorkspace(tab.workspaceId) ? tab.workspaceId : DEFAULT_WORKSPACE.id;
-        createTab(url, workspaceId);
+        createTab(url, workspaceId, tab);
       });
       restoredSession = true;
       console.log(`Restored session with ${savedSession.tabs.length} tabs`);
@@ -908,7 +937,7 @@ function updateActiveTabBounds() {
   });
 }
 
-function createTab(url = null, requestedWorkspaceId = activeWorkspaceId) {
+function createTab(url = null, requestedWorkspaceId = activeWorkspaceId, restoredState = {}) {
   const workspaceId = getWorkspace(requestedWorkspaceId) ? requestedWorkspaceId : DEFAULT_WORKSPACE.id;
   const tabId = nextTabId++;
   const view = new WebContentsView({
@@ -930,6 +959,7 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId) {
     workspaceId,
     suspended: false,
     suspendedUrl: '',
+    ...normalizeTabOrganization({ ...restoredState, workspaceId }, tabGroups),
   };
   tabs.push(tab);
   tabViews.set(tabId, view);
@@ -1323,6 +1353,7 @@ function closeTab(tabId) {
   if (index === -1) return;
   const tab = tabs[index];
   if (tab.workspaceId !== activeWorkspaceId) return;
+  if (tab.pinned) return false;
   const workspaceTabs = getTabsInWorkspace(tab.workspaceId);
   const workspaceIndex = workspaceTabs.findIndex((workspaceTab) => workspaceTab.id === tabId);
 
@@ -1413,7 +1444,8 @@ function closeTab(tabId) {
 function sendTabsUpdate() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('tabs-update', {
-    tabs: getTabsInWorkspace().map(t => ({ id: t.id, title: t.title, favicon: t.favicon, workspaceId: t.workspaceId, suspended: Boolean(t.suspended) })),
+    tabs: getTabsInWorkspace().map(t => ({ id: t.id, title: t.title, favicon: t.favicon, workspaceId: t.workspaceId, suspended: Boolean(t.suspended), pinned: Boolean(t.pinned), groupId: t.groupId })),
+    tabGroups: getTabGroupsInWorkspace(),
     activeTabId
   });
   sendWorkspacesUpdate();
@@ -1644,7 +1676,7 @@ ipcMain.on('duplicate-tab', (event, tabId) => {
   if (!requireTrustedInternalSender(event, 'duplicate-tab', ['index.html']) || !Number.isInteger(tabId)) return;
   const tab = tabs.find(t => t.id === tabId);
   if (tab && tab.workspaceId === activeWorkspaceId) {
-    const newTabId = createTab(tab.url, tab.workspaceId);
+    const newTabId = createTab(tab.url, tab.workspaceId, { groupId: tab.groupId });
     // Set the title and favicon once the page loads
     const newView = tabViews.get(newTabId);
     if (newView) {
@@ -1668,7 +1700,7 @@ ipcMain.on('duplicate-tab', (event, tabId) => {
 ipcMain.on('close-other-tabs', (event, tabId) => {
   if (!requireTrustedInternalSender(event, 'close-other-tabs', ['index.html']) || !Number.isInteger(tabId)) return;
   // Close all tabs except the specified one
-  const tabsToClose = getTabsInWorkspace().filter(t => t.id !== tabId);
+  const tabsToClose = getTabsInWorkspace().filter(t => t.id !== tabId && !t.pinned);
   tabsToClose.forEach(t => closeTab(t.id));
 });
 
@@ -1679,7 +1711,7 @@ ipcMain.on('close-tabs-to-right', (event, tabId) => {
   // Find the index of the specified tab in the current workspace.
   const tabIndex = workspaceTabs.findIndex(t => t.id === tabId);
   if (tabIndex !== -1) {
-    const tabsToClose = workspaceTabs.slice(tabIndex + 1);
+    const tabsToClose = workspaceTabs.slice(tabIndex + 1).filter((tab) => !tab.pinned);
     tabsToClose.forEach(t => closeTab(t.id));
   }
 });
@@ -1723,6 +1755,8 @@ ipcMain.handle('delete-workspace', async (event, workspaceId) => {
     tabViews.delete(tab.id);
   }
   tabs = tabs.filter((tab) => tab.workspaceId !== workspaceId);
+  tabGroups = tabGroups.filter((group) => group.workspaceId !== workspaceId);
+  saveTabGroups();
   workspaces = workspaces.filter((item) => item.id !== workspaceId);
   saveWorkspaces();
 
@@ -1747,6 +1781,54 @@ ipcMain.handle('suspend-background-tabs', (event) => {
 ipcMain.handle('suspend-tab', (event, tabId) => {
   if (!requireTrustedInternalSender(event, 'suspend-tab', ['index.html']) || !Number.isInteger(tabId)) return false;
   return suspendTab(tabId);
+});
+
+ipcMain.handle('get-tab-groups', (event) => {
+  if (!requireTrustedInternalSender(event, 'get-tab-groups', ['index.html'])) return [];
+  return getTabGroupsInWorkspace();
+});
+
+ipcMain.handle('create-tab-group', (event, input) => {
+  if (!requireTrustedInternalSender(event, 'create-tab-group', ['index.html'])) return { ok: false, error: 'untrusted-sender' };
+  const group = createGroupRecord(input, tabGroups, activeWorkspaceId);
+  if (!group) return { ok: false, error: 'invalid-group' };
+  tabGroups.push(group);
+  saveTabGroups();
+  sendTabsUpdate();
+  return { ok: true, group };
+});
+
+ipcMain.handle('assign-tab-group', (event, tabId, groupId) => {
+  if (!requireTrustedInternalSender(event, 'assign-tab-group', ['index.html']) || !Number.isInteger(tabId)) return false;
+  const tab = tabs.find((item) => item.id === tabId);
+  if (!tab || tab.workspaceId !== activeWorkspaceId) return false;
+  if (groupId !== null && typeof groupId !== 'string') return false;
+  if (groupId !== null && !getTabGroup(groupId, activeWorkspaceId)) return false;
+  tab.groupId = groupId;
+  sendTabsUpdate();
+  return true;
+});
+
+ipcMain.handle('delete-tab-group', (event, groupId) => {
+  if (!requireTrustedInternalSender(event, 'delete-tab-group', ['index.html']) || typeof groupId !== 'string') return false;
+  const group = getTabGroup(groupId, activeWorkspaceId);
+  if (!group) return false;
+  tabGroups = tabGroups.filter((item) => item.id !== groupId);
+  tabs.forEach((tab) => {
+    if (tab.workspaceId === activeWorkspaceId && tab.groupId === groupId) tab.groupId = null;
+  });
+  saveTabGroups();
+  sendTabsUpdate();
+  return true;
+});
+
+ipcMain.handle('toggle-tab-pin', (event, tabId) => {
+  if (!requireTrustedInternalSender(event, 'toggle-tab-pin', ['index.html']) || !Number.isInteger(tabId)) return false;
+  const tab = tabs.find((item) => item.id === tabId);
+  if (!tab || tab.workspaceId !== activeWorkspaceId) return false;
+  tab.pinned = !tab.pinned;
+  sendTabsUpdate();
+  return tab.pinned;
 });
 
 // Settings panel - shrink browser view to make room
@@ -2356,6 +2438,7 @@ app.whenReady().then(async () => {
   // Load settings before creating window
   loadSettings();
   loadWorkspaces();
+  loadTabGroups();
 
   // Set native theme so websites respect light/dark preference on startup
   nativeTheme.themeSource = (settings.theme === 'light') ? 'light' : 'dark';

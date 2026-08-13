@@ -261,6 +261,14 @@
       color: var(--text-primary);
     }
 
+    .tab.pinned { min-width: 36px; max-width: 36px; padding: 0 6px; gap: 0; }
+    .tab.pinned .tab-title { display: none; }
+    .tab-pinned-marker { color: var(--accent); font-size: 10px; line-height: 1; }
+    .tab-group-marker { width: 3px; height: 14px; border-radius: 99px; background: var(--tab-group-color, var(--accent)); flex-shrink: 0; }
+    .tab-group-marker.blueberry { background: #4a90d9; }
+    .tab-group-marker.acai { background: #9b59b6; }
+    .tab-group-marker.emerald { background: #2ecc71; }
+
     .new-tab-btn, .close-tab-btn {
       width: 22px;
       height: 22px;
@@ -351,6 +359,19 @@
     .workspace-suspend:hover { border-color: var(--accent); background: var(--bg-tertiary); }
     .tab.suspended { opacity: 0.6; }
     .tab-suspended-marker { color: var(--accent); font-size: 10px; line-height: 1; }
+
+    .command-overlay { display: none; position: fixed; inset: 0; z-index: 20000; padding-top: 12vh; background: rgba(0, 0, 0, 0.5); backdrop-filter: blur(4px); }
+    .command-overlay.open { display: block; }
+    .command-panel { width: min(620px, calc(100vw - 32px)); margin: 0 auto; overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-secondary); box-shadow: 0 24px 80px rgba(0, 0, 0, 0.45); -webkit-app-region: no-drag; }
+    .command-input { width: 100%; box-sizing: border-box; border: 0; border-bottom: 1px solid var(--border); padding: 15px 16px; background: transparent; color: var(--text-primary); font-size: 14px; outline: none; }
+    .command-results { max-height: min(430px, 58vh); overflow: auto; padding: 6px; }
+    .command-section { padding: 8px 10px 4px; color: var(--text-muted); font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase; }
+    .command-item { width: 100%; display: flex; align-items: center; gap: 10px; border: 0; border-radius: 8px; padding: 10px; background: transparent; color: var(--text-primary); cursor: pointer; text-align: left; }
+    .command-item:hover, .command-item.active { background: var(--bg-tertiary); }
+    .command-item-icon { width: 18px; color: var(--accent); text-align: center; }
+    .command-item-label { flex: 1; font-size: 12px; }
+    .command-item-meta { color: var(--text-muted); font-size: 10px; }
+    .command-footer { display: flex; justify-content: space-between; padding: 9px 12px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 10px; }
 
     .url-container {
       flex: 1;
@@ -3309,6 +3330,12 @@
       <span id="poison-label">Poison</span>
     </button>
 
+    <button class="toolbar-btn" id="command-btn" title="Command Center (Ctrl+K)" style="-webkit-app-region: no-drag;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="10"/><path d="m8 12 2.5 2.5L16 9"/>
+      </svg>
+    </button>
+
     <button class="toolbar-btn" id="discord-btn" title="Join Discord" style="-webkit-app-region: no-drag;" onclick="window.vitamin.openExternal('https://discord.gg/Udt3edD4DX')">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
@@ -3339,6 +3366,14 @@
           <path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
         </svg>
       </button>
+    </div>
+  </div>
+
+  <div class="command-overlay" id="command-overlay" aria-hidden="true">
+    <div class="command-panel" role="dialog" aria-modal="true" aria-label="Command Center">
+      <input class="command-input" id="command-input" placeholder="Search tabs, workspaces, and browser actions…" autocomplete="off" />
+      <div class="command-results" id="command-results"></div>
+      <div class="command-footer"><span>↑↓ Navigate · Enter Select</span><span>Esc Close</span></div>
     </div>
   </div>
 
@@ -3968,11 +4003,17 @@ https://www.coindesk.com"></textarea>
     const tabBar = document.getElementById('tab-bar');
     const newTabBtn = document.getElementById('new-tab-btn');
     const closeTabBtn = document.getElementById('close-tab-btn');
+    const commandBtn = document.getElementById('command-btn');
+    const commandOverlay = document.getElementById('command-overlay');
+    const commandInput = document.getElementById('command-input');
+    const commandResults = document.getElementById('command-results');
     const workspaceButton = document.getElementById('workspace-button');
     const workspaceMenu = document.getElementById('workspace-menu');
     const workspaceName = document.getElementById('workspace-name');
     const workspaceDot = document.getElementById('workspace-dot');
     let currentWorkspaceData = { workspaces: [], activeWorkspaceId: 'personal' };
+    let commandEntries = [];
+    let commandIndex = 0;
 
     backBtn.addEventListener('click', () => window.vitamin.goBack());
     forwardBtn.addEventListener('click', () => window.vitamin.goForward());
@@ -3996,6 +4037,7 @@ https://www.coindesk.com"></textarea>
 
     function renderTabs(data) {
       currentActiveTabId = data.activeTabId;
+      const groupMap = new Map((data.tabGroups || []).map((group) => [group.id, group]));
 
       // Clear existing tabs (keep control buttons and divider)
       const existingTabs = tabBar.querySelectorAll('.tab');
@@ -4013,8 +4055,9 @@ https://www.coindesk.com"></textarea>
 
       // Render tabs
       data.tabs.forEach(tab => {
+        const group = groupMap.get(tab.groupId);
         const tabEl = document.createElement('div');
-        tabEl.className = `tab ${tab.id === data.activeTabId ? 'active' : ''} ${tab.suspended ? 'suspended' : ''}`;
+        tabEl.className = `tab ${tab.id === data.activeTabId ? 'active' : ''} ${tab.suspended ? 'suspended' : ''} ${tab.pinned ? 'pinned' : ''}`;
         tabEl.dataset.tabId = tab.id;
         tabEl.title = tab.suspended ? `Parked tab — ${tab.title || 'New Tab'}` : (tab.title || 'New Tab');
 
@@ -4026,8 +4069,10 @@ https://www.coindesk.com"></textarea>
         const title = tab.title || 'New Tab';
 
         tabEl.innerHTML = `
+          ${group ? `<span class="tab-group-marker ${escapeHtml(group.color || '')}" title="${escapeHtml(group.name)}"></span>` : ''}
           ${faviconHtml}
           <span class="tab-title">${escapeHtml(title)}</span>
+          ${tab.pinned ? '<span class="tab-pinned-marker" title="Pinned tab">◆</span>' : ''}
           ${tab.suspended ? '<span class="tab-suspended-marker" title="Parked to reduce background activity">◦</span>' : ''}
         `;
 
@@ -4051,6 +4096,127 @@ https://www.coindesk.com"></textarea>
         activeTab.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
       }
     }
+
+    function closeCommandCenter() {
+      commandOverlay.classList.remove('open');
+      commandOverlay.setAttribute('aria-hidden', 'true');
+    }
+
+    function commandData() {
+      return window.currentTabsData || { tabs: [], tabGroups: [] };
+    }
+
+    async function createGroupForTab(tabId) {
+      const name = window.prompt('Name this tab group (max 28 characters):');
+      if (name === null) return;
+      const colors = ['orange', 'blueberry', 'acai', 'emerald'];
+      const groups = commandData().tabGroups || [];
+      const result = await window.vitamin.createTabGroup({ name, color: colors[groups.length % colors.length] });
+      if (!result?.ok) {
+        window.alert('That tab group name is unavailable or invalid.');
+        return;
+      }
+      await window.vitamin.assignTabGroup(tabId, result.group.id);
+    }
+
+    function buildCommandEntries(query) {
+      const data = commandData();
+      const activeTab = data.tabs.find((tab) => tab.id === currentActiveTabId);
+      const entries = [
+        { section: 'Actions', icon: '+', label: 'New tab', meta: 'Ctrl+T', run: () => window.vitamin.createTab() },
+        { section: 'Actions', icon: '⌁', label: 'Park background tabs', meta: 'Current workspace', run: () => window.vitamin.suspendBackgroundTabs() },
+        { section: 'Actions', icon: '◆', label: activeTab?.pinned ? 'Unpin active tab' : 'Pin active tab', meta: 'Tab protection', run: () => activeTab && window.vitamin.toggleTabPin(activeTab.id) },
+        { section: 'Actions', icon: '◫', label: 'Create group from active tab', meta: 'Organization', run: () => activeTab && createGroupForTab(activeTab.id) },
+      ];
+
+      data.tabs.forEach((tab) => {
+        entries.push({ section: 'Tabs', icon: tab.pinned ? '◆' : '◌', label: tab.title || 'New Tab', meta: tab.suspended ? 'Parked' : 'Switch', run: () => window.vitamin.switchTab(tab.id) });
+      });
+      (currentWorkspaceData.workspaces || []).forEach((workspace) => {
+        entries.push({ section: 'Workspaces', icon: '◍', label: workspace.name, meta: `${workspace.tabCount || 0} tabs`, run: () => window.vitamin.switchWorkspace(workspace.id) });
+      });
+
+      const normalizedQuery = query.trim().toLowerCase();
+      return normalizedQuery ? entries.filter((entry) => `${entry.label} ${entry.meta}`.toLowerCase().includes(normalizedQuery)) : entries;
+    }
+
+    function renderCommandEntries() {
+      commandEntries = buildCommandEntries(commandInput.value);
+      commandIndex = Math.min(commandIndex, Math.max(commandEntries.length - 1, 0));
+      commandResults.replaceChildren();
+      if (!commandEntries.length) {
+        const empty = document.createElement('div');
+        empty.className = 'command-section';
+        empty.textContent = 'No matching commands';
+        commandResults.appendChild(empty);
+        return;
+      }
+
+      let lastSection = null;
+      commandEntries.forEach((entry, index) => {
+        if (entry.section !== lastSection) {
+          const section = document.createElement('div');
+          section.className = 'command-section';
+          section.textContent = entry.section;
+          commandResults.appendChild(section);
+          lastSection = entry.section;
+        }
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = `command-item ${index === commandIndex ? 'active' : ''}`;
+        item.innerHTML = '<span class="command-item-icon"></span><span class="command-item-label"></span><span class="command-item-meta"></span>';
+        item.querySelector('.command-item-icon').textContent = entry.icon;
+        item.querySelector('.command-item-label').textContent = entry.label;
+        item.querySelector('.command-item-meta').textContent = entry.meta;
+        item.addEventListener('click', async () => {
+          await entry.run();
+          closeCommandCenter();
+        });
+        commandResults.appendChild(item);
+      });
+    }
+
+    function openCommandCenter() {
+      commandOverlay.classList.add('open');
+      commandOverlay.setAttribute('aria-hidden', 'false');
+      commandInput.value = '';
+      commandIndex = 0;
+      renderCommandEntries();
+      requestAnimationFrame(() => commandInput.focus());
+    }
+
+    commandBtn.addEventListener('click', openCommandCenter);
+    commandInput.addEventListener('input', () => {
+      commandIndex = 0;
+      renderCommandEntries();
+    });
+    commandOverlay.addEventListener('click', (event) => {
+      if (event.target === commandOverlay) closeCommandCenter();
+    });
+    document.addEventListener('keydown', async (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        if (commandOverlay.classList.contains('open')) closeCommandCenter(); else openCommandCenter();
+        return;
+      }
+      if (!commandOverlay.classList.contains('open')) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeCommandCenter();
+      } else if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        commandIndex = Math.min(commandIndex + 1, commandEntries.length - 1);
+        renderCommandEntries();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        commandIndex = Math.max(commandIndex - 1, 0);
+        renderCommandEntries();
+      } else if (event.key === 'Enter' && commandEntries[commandIndex]) {
+        event.preventDefault();
+        await commandEntries[commandIndex].run();
+        closeCommandCenter();
+      }
+    });
 
     function closeWorkspaceMenu() {
       workspaceMenu.classList.remove('open');
@@ -4169,6 +4335,8 @@ https://www.coindesk.com"></textarea>
 
       // Get tab data
       const tabData = window.currentTabsData ? window.currentTabsData.tabs.find(t => t.id === tabId) : null;
+      const groups = window.currentTabsData?.tabGroups || [];
+      const groupItems = groups.map((group) => `<div class="context-menu-item" data-action="assign-group" data-group-id="${escapeHtml(group.id)}"><span>Move to ${escapeHtml(group.name)}</span></div>`).join('');
 
       // Menu items
       menu.innerHTML = `
@@ -4181,6 +4349,14 @@ https://www.coindesk.com"></textarea>
         <div class="context-menu-item" data-action="suspend-tab">
           <span>Park Background Tab</span>
         </div>
+        <div class="context-menu-item" data-action="toggle-pin">
+          <span>${tabData?.pinned ? 'Unpin Tab' : 'Pin Tab'}</span>
+        </div>
+        <div class="context-menu-item" data-action="create-group">
+          <span>Create Group from Tab</span>
+        </div>
+        ${tabData?.groupId ? '<div class="context-menu-item" data-action="remove-group"><span>Remove from Group</span></div><div class="context-menu-item" data-action="delete-group"><span>Delete This Group</span></div>' : ''}
+        ${groupItems}
         <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="close-tab">
           <span>Close</span>
@@ -4198,7 +4374,7 @@ https://www.coindesk.com"></textarea>
 
       // Add event listeners to menu items
       menu.querySelectorAll('.context-menu-item').forEach(item => {
-        item.addEventListener('click', () => {
+        item.addEventListener('click', async () => {
           const action = item.dataset.action;
           switch (action) {
             case 'new-tab':
@@ -4210,6 +4386,23 @@ https://www.coindesk.com"></textarea>
               break;
             case 'suspend-tab':
               window.vitamin.suspendTab(tabId);
+              break;
+            case 'toggle-pin':
+              await window.vitamin.toggleTabPin(tabId);
+              break;
+            case 'create-group':
+              await createGroupForTab(tabId);
+              break;
+            case 'assign-group':
+              await window.vitamin.assignTabGroup(tabId, item.dataset.groupId);
+              break;
+            case 'remove-group':
+              await window.vitamin.assignTabGroup(tabId, null);
+              break;
+            case 'delete-group':
+              if (tabData?.groupId && window.confirm('Delete this group? Its tabs will remain open.')) {
+                await window.vitamin.deleteTabGroup(tabData.groupId);
+              }
               break;
             case 'close-tab':
               window.vitamin.closeTab(tabId);
