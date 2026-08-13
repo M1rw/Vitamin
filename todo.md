@@ -23,3 +23,10 @@
 - [ ] Migrate the tab-view layer from deprecated BrowserView to WebContentsView with desktop runtime regression coverage.
 - [ ] Add tab suspension and a local workspace performance ledger.
 - [ ] Add tab groups, pinning, and keyboard command search with validated IPC methods.
+
+## Workspace performance cycle
+
+- [x] Map the current tab lifecycle and identify safe suspension and restoration boundaries.
+- [x] Implement a local workspace performance ledger and user-controlled tab suspension.
+- [x] Add suspension and metric regression tests, then run source-level verification.
+- [ ] Push the verified workspace performance increment to the connected GitHub repository.

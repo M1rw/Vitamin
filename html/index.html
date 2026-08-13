@@ -345,6 +345,12 @@
     .workspace-create { gap: 7px; padding: 9px 8px 7px; margin-top: 4px; border-top: 1px solid var(--border); color: var(--accent); font-weight: 600; }
     .workspace-delete { padding: 7px 8px; margin-top: 1px; color: #ff7777; font-size: 10px; }
     .workspace-delete:hover { background: rgba(255, 100, 100, 0.1); }
+    .workspace-ledger { margin: 5px 2px 2px; padding: 8px; border-radius: 7px; background: var(--bg-primary); color: var(--text-muted); font-size: 10px; line-height: 1.55; }
+    .workspace-ledger strong { color: var(--text-secondary); font-weight: 600; }
+    .workspace-suspend { width: 100%; padding: 8px; margin-top: 5px; border: 1px solid var(--border); border-radius: 7px; background: transparent; color: var(--text-primary); cursor: pointer; text-align: left; font-size: 10px; }
+    .workspace-suspend:hover { border-color: var(--accent); background: var(--bg-tertiary); }
+    .tab.suspended { opacity: 0.6; }
+    .tab-suspended-marker { color: var(--accent); font-size: 10px; line-height: 1; }
 
     .url-container {
       flex: 1;
@@ -4008,9 +4014,9 @@ https://www.coindesk.com"></textarea>
       // Render tabs
       data.tabs.forEach(tab => {
         const tabEl = document.createElement('div');
-        tabEl.className = `tab ${tab.id === data.activeTabId ? 'active' : ''}`;
+        tabEl.className = `tab ${tab.id === data.activeTabId ? 'active' : ''} ${tab.suspended ? 'suspended' : ''}`;
         tabEl.dataset.tabId = tab.id;
-        tabEl.title = tab.title || 'New Tab';
+        tabEl.title = tab.suspended ? `Parked tab — ${tab.title || 'New Tab'}` : (tab.title || 'New Tab');
 
         // Favicon
         const faviconHtml = tab.favicon
@@ -4022,6 +4028,7 @@ https://www.coindesk.com"></textarea>
         tabEl.innerHTML = `
           ${faviconHtml}
           <span class="tab-title">${escapeHtml(title)}</span>
+          ${tab.suspended ? '<span class="tab-suspended-marker" title="Parked to reduce background activity">◦</span>' : ''}
         `;
 
         // Click tab to switch
@@ -4078,6 +4085,30 @@ https://www.coindesk.com"></textarea>
         });
         workspaceMenu.appendChild(item);
       });
+
+      const ledger = document.createElement('div');
+      ledger.className = 'workspace-ledger';
+      ledger.textContent = 'Loading local workspace ledger…';
+      workspaceMenu.appendChild(ledger);
+      window.vitamin.getWorkspaceLedger(activeWorkspace.id).then((metrics) => {
+        if (!metrics || !ledger.isConnected) return;
+        const cacheMB = (metrics.cacheBytes / (1024 * 1024)).toFixed(1);
+        ledger.innerHTML = `<strong>Local ledger</strong><br>${metrics.liveTabs} live · ${metrics.suspendedTabs} parked<br>${cacheMB} MB cache · ${metrics.persistentSession ? 'isolated session' : 'personal session'}`;
+      }).catch(() => {
+        if (ledger.isConnected) ledger.textContent = 'Local workspace ledger unavailable.';
+      });
+
+      const suspend = document.createElement('button');
+      suspend.className = 'workspace-suspend';
+      suspend.type = 'button';
+      suspend.textContent = 'Park background tabs to reduce activity';
+      suspend.disabled = (activeWorkspace.tabCount || 0) < 2;
+      suspend.addEventListener('click', async () => {
+        const result = await window.vitamin.suspendBackgroundTabs();
+        if (!result?.ok) window.alert('Background tabs could not be parked.');
+        closeWorkspaceMenu();
+      });
+      workspaceMenu.appendChild(suspend);
 
       const create = document.createElement('button');
       create.className = 'workspace-create';
@@ -4147,6 +4178,9 @@ https://www.coindesk.com"></textarea>
         <div class="context-menu-item" data-action="duplicate-tab">
           <span>Duplicate</span>
         </div>
+        <div class="context-menu-item" data-action="suspend-tab">
+          <span>Park Background Tab</span>
+        </div>
         <div class="context-menu-separator"></div>
         <div class="context-menu-item" data-action="close-tab">
           <span>Close</span>
@@ -4173,6 +4207,9 @@ https://www.coindesk.com"></textarea>
             case 'duplicate-tab':
               // We'll need to implement this in the main process
               window.vitamin.duplicateTab(tabId);
+              break;
+            case 'suspend-tab':
+              window.vitamin.suspendTab(tabId);
               break;
             case 'close-tab':
               window.vitamin.closeTab(tabId);

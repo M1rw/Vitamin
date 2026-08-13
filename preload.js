@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('vitamin', {
   createWorkspace: (input) => ipcRenderer.invoke('create-workspace', input),
   switchWorkspace: (workspaceId) => ipcRenderer.send('switch-workspace', workspaceId),
   deleteWorkspace: (workspaceId) => ipcRenderer.invoke('delete-workspace', workspaceId),
+  getWorkspaceLedger: (workspaceId) => ipcRenderer.invoke('get-workspace-ledger', workspaceId),
+  suspendBackgroundTabs: () => ipcRenderer.invoke('suspend-background-tabs'),
+  suspendTab: (tabId) => ipcRenderer.invoke('suspend-tab', tabId),
 
   // Poisoning
   togglePoison: (enabled) => ipcRenderer.send('toggle-poison', enabled),

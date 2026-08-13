@@ -16,8 +16,9 @@
     "build:protected": "npm run protect && npm run build:all && npm run restore",
     "test:ipc": "node --test test/ipc-guards.test.mjs",
     "test:workspaces": "node --test test/workspaces.test.mjs",
-    "test:security": "npm run check:ipc && npm run test:ipc && npm run test:workspaces",
-    "check:ipc": "node --check main.js && node --check preload.js && node --check preload-start.js && node --check ipc-guards.js && node --check workspaces.js && node --check adblock.js"
+    "test:performance": "node --test test/tab-performance.test.mjs",
+    "test:security": "npm run check:ipc && npm run test:ipc && npm run test:workspaces && npm run test:performance",
+    "check:ipc": "node --check main.js && node --check preload.js && node --check preload-start.js && node --check ipc-guards.js && node --check workspaces.js && node --check tab-performance.js && node --check adblock.js"
   },
   "keywords": [
     "privacy",

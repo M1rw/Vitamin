@@ -15,6 +15,7 @@ const {
   getWorkspacePartition,
   normalizeWorkspaceState,
 } = require('./workspaces');
+const { canSuspendTab, summarizeWorkspaceLedger } = require('./tab-performance');
 const { frequencies, getSearchTerms, getSites, getDelay, getPersonaList, getFrequencyList } = require('./poisonData');
 const fetch = require('cross-fetch');
 const os = require('os');
@@ -601,6 +602,47 @@ function getTabsInWorkspace(workspaceId = activeWorkspaceId) {
   return tabs.filter((tab) => tab.workspaceId === workspaceId);
 }
 
+function suspendTab(tabId) {
+  const tab = tabs.find((item) => item.id === tabId);
+  if (!canSuspendTab(tab) || tab.workspaceId !== activeWorkspaceId || tab.id === activeTabId) return false;
+  const view = tabViews.get(tabId);
+  if (!view || view.webContents.isDestroyed()) return false;
+
+  tab.suspended = true;
+  tab.suspendedUrl = tab.url;
+  view.webContents.stop();
+  view.webContents.loadURL('about:blank');
+  sendTabsUpdate();
+  return true;
+}
+
+function suspendBackgroundTabs(workspaceId = activeWorkspaceId) {
+  if (workspaceId !== activeWorkspaceId) return 0;
+  let suspendedCount = 0;
+  getTabsInWorkspace(workspaceId).forEach((tab) => {
+    if (tab.id !== activeTabId && suspendTab(tab.id)) suspendedCount += 1;
+  });
+  return suspendedCount;
+}
+
+async function getWorkspaceLedger(workspaceId = activeWorkspaceId) {
+  const workspace = getWorkspace(workspaceId);
+  if (!workspace) return null;
+  const workspaceTabs = getTabsInWorkspace(workspaceId);
+  const workspaceSession = getWorkspaceSession(workspaceId);
+  let cacheBytes = 0;
+  try {
+    cacheBytes = await workspaceSession.getCacheSize();
+  } catch (error) {
+    console.warn(`[WORKSPACE] Unable to read cache size for ${workspaceId}:`, error.message);
+  }
+
+  return {
+    workspaceId,
+    ...summarizeWorkspaceLedger(workspaceTabs, cacheBytes, workspaceId !== DEFAULT_WORKSPACE.id),
+  };
+}
+
 function sendWorkspacesUpdate() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('workspaces-update', {
@@ -867,6 +909,8 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId) {
     url: '',
     favicon: '',
     workspaceId,
+    suspended: false,
+    suspendedUrl: '',
   };
   tabs.push(tab);
   tabViews.set(tabId, view);
@@ -910,6 +954,8 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId) {
 
   // Set up navigation listeners for this tab
   view.webContents.on('did-navigate', (event, url) => {
+    // about:blank is used only while a tab is intentionally suspended.
+    if (tab.suspended && url === 'about:blank') return;
     tab.url = url;
     const displayUrl = url.startsWith('file://') ? '' : url;
 
@@ -956,6 +1002,7 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId) {
   });
 
   view.webContents.on('did-navigate-in-page', (event, url) => {
+    if (tab.suspended && url === 'about:blank') return;
     tab.url = url;
     const displayUrl = url.startsWith('file://') ? '' : url;
     if (tabId === activeTabId) {
@@ -971,6 +1018,7 @@ function createTab(url = null, requestedWorkspaceId = activeWorkspaceId) {
   });
 
   view.webContents.on('page-title-updated', (event, title) => {
+    if (tab.suspended) return;
     tab.title = title || 'New Tab';
     sendTabsUpdate();
   });
@@ -1197,6 +1245,17 @@ function switchToTab(tabId) {
   const workspaceTab = tabs.find(t => t.id === tabId);
   if (!workspaceTab || workspaceTab.workspaceId !== activeWorkspaceId) return;
 
+  if (workspaceTab.suspended) {
+    const restoreUrl = workspaceTab.suspendedUrl || workspaceTab.url;
+    workspaceTab.suspended = false;
+    workspaceTab.suspendedUrl = '';
+    if (restoreUrl) {
+      view.webContents.loadURL(restoreUrl);
+    } else {
+      view.webContents.loadFile('html/start.html');
+    }
+  }
+
   activeTabId = tabId;
   mainWindow.setBrowserView(view);
   updateActiveTabBounds();
@@ -1332,7 +1391,7 @@ function closeTab(tabId) {
 function sendTabsUpdate() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send('tabs-update', {
-    tabs: getTabsInWorkspace().map(t => ({ id: t.id, title: t.title, favicon: t.favicon, workspaceId: t.workspaceId })),
+    tabs: getTabsInWorkspace().map(t => ({ id: t.id, title: t.title, favicon: t.favicon, workspaceId: t.workspaceId, suspended: Boolean(t.suspended) })),
     activeTabId
   });
   sendWorkspacesUpdate();
@@ -1650,6 +1709,22 @@ ipcMain.handle('delete-workspace', async (event, workspaceId) => {
   await workspaceSession.clearCache();
   sendTabsUpdate();
   return { ok: true };
+});
+
+ipcMain.handle('get-workspace-ledger', async (event, workspaceId) => {
+  if (!requireTrustedInternalSender(event, 'get-workspace-ledger', ['index.html'])) return null;
+  const selectedWorkspaceId = typeof workspaceId === 'string' ? workspaceId : activeWorkspaceId;
+  return getWorkspaceLedger(selectedWorkspaceId);
+});
+
+ipcMain.handle('suspend-background-tabs', (event) => {
+  if (!requireTrustedInternalSender(event, 'suspend-background-tabs', ['index.html'])) return { ok: false, suspendedCount: 0 };
+  return { ok: true, suspendedCount: suspendBackgroundTabs() };
+});
+
+ipcMain.handle('suspend-tab', (event, tabId) => {
+  if (!requireTrustedInternalSender(event, 'suspend-tab', ['index.html']) || !Number.isInteger(tabId)) return false;
+  return suspendTab(tabId);
 });
 
 // Settings panel - shrink browser view to make room
