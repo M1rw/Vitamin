@@ -4081,6 +4081,7 @@ https://www.coindesk.com"></textarea>
     let currentWorkspaceData = { workspaces: [], activeWorkspaceId: 'personal' };
     let commandEntries = [];
     let commandIndex = 0;
+    let recentlyClosedTabs = [];
     let currentPrivacyState = null;
 
     backBtn.addEventListener('click', () => window.vitamin.goBack());
@@ -4188,16 +4189,30 @@ https://www.coindesk.com"></textarea>
       await window.vitamin.assignTabGroup(tabId, result.group.id);
     }
 
+    function closedTabMeta(entry) {
+      try { return new URL(entry.url).hostname || 'Local recovery'; } catch { return 'Local recovery'; }
+    }
+
     function buildCommandEntries(query) {
       const data = commandData();
       const activeTab = data.tabs.find((tab) => tab.id === currentActiveTabId);
+      const recoveryEntries = recentlyClosedTabs.slice(0, 8).map((entry, index) => ({
+        section: 'Recently closed',
+        icon: '↶',
+        label: entry.title || 'Untitled tab',
+        meta: `${index === 0 ? 'Latest · ' : ''}${closedTabMeta(entry)}`,
+        run: () => window.vitamin.reopenClosedTab(entry.id),
+      }));
       const entries = [
         { section: 'Actions', icon: '+', label: 'New tab', meta: 'Ctrl+T', run: () => window.vitamin.createTab() },
+        { section: 'Actions', icon: '↶', label: 'Reopen latest closed tab', meta: 'Ctrl+Shift+T', run: () => window.vitamin.reopenClosedTab() },
         { section: 'Actions', icon: '⌁', label: 'Park background tabs', meta: 'Current workspace', run: () => window.vitamin.suspendBackgroundTabs() },
         { section: 'Actions', icon: '◆', label: activeTab?.pinned ? 'Unpin active tab' : 'Pin active tab', meta: 'Tab protection', run: () => activeTab && window.vitamin.toggleTabPin(activeTab.id) },
         { section: 'Actions', icon: '◫', label: 'Create group from active tab', meta: 'Organization', run: () => activeTab && createGroupForTab(activeTab.id) },
         { section: 'Actions', icon: '▤', label: activeTab?.readerMode ? 'Leave reader mode' : 'Open reader mode', meta: 'Eligible HTTPS pages', run: () => activeTab && window.vitamin.toggleReaderMode(activeTab.id) },
         { section: 'Actions', icon: '◈', label: 'Open local privacy ledger', meta: 'Site rules', run: () => openPrivacyLedger() },
+        ...recoveryEntries,
+        ...(recentlyClosedTabs.length ? [{ section: 'Recently closed', icon: '×', label: 'Clear recently closed tabs', meta: 'Current workspace', run: () => window.vitamin.clearRecentlyClosedTabs() }] : []),
       ];
 
       data.tabs.forEach((tab) => {
@@ -4540,6 +4555,9 @@ https://www.coindesk.com"></textarea>
         ${tabData?.groupId ? '<div class="context-menu-item" data-action="remove-group"><span>Remove from Group</span></div><div class="context-menu-item" data-action="delete-group"><span>Delete This Group</span></div>' : ''}
         ${groupItems}
         <div class="context-menu-separator"></div>
+        <div class="context-menu-item" data-action="reopen-closed-tab">
+          <span>Reopen Last Closed Tab</span>
+        </div>
         <div class="context-menu-item" data-action="close-tab">
           <span>Close</span>
         </div>
@@ -4589,6 +4607,9 @@ https://www.coindesk.com"></textarea>
                 await window.vitamin.deleteTabGroup(tabData.groupId);
               }
               break;
+            case 'reopen-closed-tab':
+              await window.vitamin.reopenClosedTab();
+              break;
             case 'close-tab':
               window.vitamin.closeTab(tabId);
               break;
@@ -4625,6 +4646,14 @@ https://www.coindesk.com"></textarea>
       };
       document.addEventListener('keydown', handleEscape);
     }
+
+    function updateRecentlyClosedTabs(entries) {
+      recentlyClosedTabs = Array.isArray(entries) ? entries : [];
+      if (commandOverlay.classList.contains('open')) renderCommandEntries();
+    }
+
+    window.vitamin.getRecentlyClosedTabs().then(updateRecentlyClosedTabs);
+    window.vitamin.onRecentlyClosedTabsUpdate(updateRecentlyClosedTabs);
 
     // Listen for tab updates
     window.vitamin.onTabsUpdate((data) => {

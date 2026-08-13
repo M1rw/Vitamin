@@ -17,6 +17,7 @@ const {
 } = require('./workspaces');
 const { canSuspendTab, summarizeWorkspaceLedger } = require('./tab-performance');
 const { createGroupRecord, normalizeGroups, normalizeTabOrganization } = require('./tab-groups');
+const { addClosedTab, createClosedTabRecord, getClosedTabsForWorkspace, normalizeClosedTabs, takeClosedTab } = require('./tab-recovery');
 const { SUPPORTED_PERMISSIONS, getRule, normalizeLedger, normalizeOrigin, normalizeRules, upsertRule } = require('./privacy-ledger');
 const { buildReaderModeScript, isReaderEligible } = require('./reader-mode');
 const { parseHttpsUrl, shouldAllowPageNavigation, shouldCreateInternalTab } = require('./navigation-policy');
@@ -98,6 +99,7 @@ const sessionPath = path.join(app.getPath('userData'), 'session.json');
 const customPersonasPath = path.join(app.getPath('userData'), 'custom-personas.json');
 const workspacesPath = path.join(app.getPath('userData'), 'workspaces.json');
 const tabGroupsPath = path.join(app.getPath('userData'), 'tab-groups.json');
+const closedTabsPath = path.join(app.getPath('userData'), 'recently-closed-tabs.json');
 const privacyStatePath = path.join(app.getPath('userData'), 'privacy-state.json');
 
 // Get performance metrics
@@ -557,6 +559,7 @@ let nextTabId = 1;
 let workspaces = [{ ...DEFAULT_WORKSPACE }];
 let activeWorkspaceId = DEFAULT_WORKSPACE.id;
 let tabGroups = [];
+let closedTabs = [];
 let privacyRules = [];
 let privacyLedger = [];
 let lastPrivacyDecision = { key: '', timestamp: 0 };
@@ -643,6 +646,72 @@ function saveTabGroups() {
   } catch (error) {
     console.error('Failed to save tab groups:', error.message);
   }
+}
+
+// Recently closed tabs are stored locally and always scoped to their original workspace.
+function loadClosedTabs() {
+  try {
+    const data = fs.existsSync(closedTabsPath) ? JSON.parse(fs.readFileSync(closedTabsPath, 'utf8')) : [];
+    closedTabs = normalizeClosedTabs(data, workspaces.map((workspace) => workspace.id));
+  } catch (error) {
+    console.error('Failed to load recently closed tabs:', error.message);
+    closedTabs = [];
+  }
+}
+
+function saveClosedTabs() {
+  try {
+    fs.writeFileSync(closedTabsPath, JSON.stringify(closedTabs, null, 2));
+  } catch (error) {
+    console.error('Failed to save recently closed tabs:', error.message);
+  }
+}
+
+function getRecentlyClosedTabs(workspaceId = activeWorkspaceId) {
+  return getClosedTabsForWorkspace(closedTabs, workspaceId).map((entry) => ({ ...entry }));
+}
+
+function sendRecentlyClosedTabsUpdate() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send('recently-closed-tabs-update', getRecentlyClosedTabs());
+}
+
+function rememberClosedTab(tab) {
+  const entry = createClosedTabRecord(tab, `closed_${require('crypto').randomUUID()}`);
+  if (!entry) return;
+  closedTabs = addClosedTab(closedTabs, entry, workspaces.map((workspace) => workspace.id));
+  saveClosedTabs();
+  sendRecentlyClosedTabsUpdate();
+}
+
+function reopenClosedTab(entryId) {
+  const workspaceIds = workspaces.map((workspace) => workspace.id);
+  const candidates = getRecentlyClosedTabs(activeWorkspaceId);
+  const selectedId = typeof entryId === 'string' ? entryId : candidates[0]?.id;
+  if (!selectedId) return { ok: false, error: 'no-recoverable-tab' };
+
+  const { entry, entries } = takeClosedTab(closedTabs, selectedId, activeWorkspaceId, workspaceIds);
+  if (!entry) return { ok: false, error: 'not-found' };
+
+  closedTabs = entries;
+  saveClosedTabs();
+  const groupId = getTabGroup(entry.groupId, activeWorkspaceId) ? entry.groupId : null;
+  const tabId = createTab(entry.url, activeWorkspaceId, { groupId });
+  const restoredTab = tabs.find((tab) => tab.id === tabId);
+  if (restoredTab) {
+    restoredTab.title = entry.title || 'Recovered tab';
+    restoredTab.favicon = entry.favicon || '';
+  }
+  sendTabsUpdate();
+  sendRecentlyClosedTabsUpdate();
+  return { ok: true, tabId, entry: { ...entry } };
+}
+
+function clearRecentlyClosedTabs() {
+  closedTabs = closedTabs.filter((entry) => entry.workspaceId !== activeWorkspaceId);
+  saveClosedTabs();
+  sendRecentlyClosedTabsUpdate();
+  return { ok: true };
 }
 
 function getTabGroup(groupId, workspaceId = activeWorkspaceId) {
@@ -771,6 +840,7 @@ function switchWorkspace(workspaceId) {
   }
 
   sendWorkspacesUpdate();
+  sendRecentlyClosedTabsUpdate();
   return true;
 }
 
@@ -886,6 +956,11 @@ function createWindow() {
           click: () => {
             if (activeTabId) closeTab(activeTabId);
           }
+        },
+        {
+          label: 'Reopen Closed Tab',
+          accelerator: 'CmdOrCtrl+Shift+T',
+          click: () => reopenClosedTab()
         },
         { type: 'separator' },
         { role: 'quit' }
@@ -1430,6 +1505,7 @@ function closeTab(tabId) {
   const tab = tabs[index];
   if (tab.workspaceId !== activeWorkspaceId) return;
   if (tab.pinned) return false;
+  rememberClosedTab(tab);
   const workspaceTabs = getTabsInWorkspace(tab.workspaceId);
   const workspaceIndex = workspaceTabs.findIndex((workspaceTab) => workspaceTab.id === tabId);
 
@@ -1748,6 +1824,22 @@ ipcMain.on('switch-tab', (event, tabId) => {
   switchToTab(tabId);
 });
 
+ipcMain.handle('get-recently-closed-tabs', (event) => {
+  if (!requireTrustedInternalSender(event, 'get-recently-closed-tabs', ['index.html'])) return [];
+  return getRecentlyClosedTabs();
+});
+
+ipcMain.handle('reopen-closed-tab', (event, entryId) => {
+  if (!requireTrustedInternalSender(event, 'reopen-closed-tab', ['index.html'])) return { ok: false, error: 'untrusted-sender' };
+  if (entryId !== undefined && typeof entryId !== 'string') return { ok: false, error: 'invalid-entry' };
+  return reopenClosedTab(entryId);
+});
+
+ipcMain.handle('clear-recently-closed-tabs', (event) => {
+  if (!requireTrustedInternalSender(event, 'clear-recently-closed-tabs', ['index.html'])) return { ok: false, error: 'untrusted-sender' };
+  return clearRecentlyClosedTabs();
+});
+
 // Duplicate tab
 ipcMain.on('duplicate-tab', (event, tabId) => {
   if (!requireTrustedInternalSender(event, 'duplicate-tab', ['index.html']) || !Number.isInteger(tabId)) return;
@@ -1833,9 +1925,11 @@ ipcMain.handle('delete-workspace', async (event, workspaceId) => {
   }
   tabs = tabs.filter((tab) => tab.workspaceId !== workspaceId);
   tabGroups = tabGroups.filter((group) => group.workspaceId !== workspaceId);
+  closedTabs = closedTabs.filter((entry) => entry.workspaceId !== workspaceId);
   privacyRules = privacyRules.filter((rule) => rule.workspaceId !== workspaceId);
   privacyLedger = privacyLedger.filter((entry) => entry.workspaceId !== workspaceId);
   saveTabGroups();
+  saveClosedTabs();
   savePrivacyState();
   workspaces = workspaces.filter((item) => item.id !== workspaceId);
   saveWorkspaces();
@@ -2581,6 +2675,7 @@ app.whenReady().then(async () => {
   loadWorkspaces();
   loadPrivacyState();
   loadTabGroups();
+  loadClosedTabs();
 
   // Set native theme so websites respect light/dark preference on startup
   nativeTheme.themeSource = (settings.theme === 'light') ? 'light' : 'dark';

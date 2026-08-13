@@ -22,8 +22,9 @@
     "test:privacy": "node --test test/privacy-ledger.test.mjs",
     "test:reader": "node --test test/reader-mode.test.mjs",
     "test:navigation": "node --test test/navigation-policy.test.mjs",
-    "test:security": "npm run check:ipc && npm run test:ipc && npm run test:workspaces && npm run test:performance && npm run test:tab-groups && npm run test:privacy && npm run test:reader && npm run test:navigation && npm run test:ui",
-    "check:ipc": "node --check main.js && node --check preload.js && node --check preload-start.js && node --check ipc-guards.js && node --check workspaces.js && node --check tab-performance.js && node --check tab-groups.js && node --check privacy-ledger.js && node --check reader-mode.js && node --check navigation-policy.js && node --check adblock.js"
+    "test:recovery": "node --test test/tab-recovery.test.mjs",
+    "test:security": "npm run check:ipc && npm run test:ipc && npm run test:workspaces && npm run test:performance && npm run test:tab-groups && npm run test:privacy && npm run test:reader && npm run test:navigation && npm run test:recovery && npm run test:ui",
+    "check:ipc": "node --check main.js && node --check preload.js && node --check preload-start.js && node --check ipc-guards.js && node --check workspaces.js && node --check tab-performance.js && node --check tab-groups.js && node --check tab-recovery.js && node --check privacy-ledger.js && node --check reader-mode.js && node --check navigation-policy.js && node --check adblock.js"
   },
   "keywords": [
     "privacy",

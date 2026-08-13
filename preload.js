@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld('vitamin', {
   duplicateTab: (tabId) => ipcRenderer.send('duplicate-tab', tabId),
   closeOtherTabs: (tabId) => ipcRenderer.send('close-other-tabs', tabId),
   closeTabsToRight: (tabId) => ipcRenderer.send('close-tabs-to-right', tabId),
+  getRecentlyClosedTabs: () => ipcRenderer.invoke('get-recently-closed-tabs'),
+  reopenClosedTab: (entryId) => ipcRenderer.invoke('reopen-closed-tab', entryId),
+  clearRecentlyClosedTabs: () => ipcRenderer.invoke('clear-recently-closed-tabs'),
 
   // Local workspaces
   getWorkspaces: () => ipcRenderer.invoke('get-workspaces'),
@@ -150,6 +153,7 @@ contextBridge.exposeInMainWorld('vitamin', {
   onLoadingStop: (callback) => ipcRenderer.on('loading-stop', () => callback()),
   onUrlChanged: (callback) => ipcRenderer.on('url-changed', (event, url) => callback(url)),
   onTabsUpdate: (callback) => ipcRenderer.on('tabs-update', (event, data) => callback(data)),
+  onRecentlyClosedTabsUpdate: (callback) => ipcRenderer.on('recently-closed-tabs-update', (event, tabs) => callback(tabs)),
   onWorkspacesUpdate: (callback) => ipcRenderer.on('workspaces-update', (event, data) => callback(data)),
   onPrivacyStateUpdate: (callback) => ipcRenderer.on('privacy-state-update', (event, data) => callback(data)),
   onPoisonActivity: (callback) => ipcRenderer.on('poison-activity', (event, activity) => callback(activity)),

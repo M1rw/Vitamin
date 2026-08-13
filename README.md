@@ -6,10 +6,18 @@ A privacy-first browser that poisons tracking data by feeding trackers garbage i
 
 ## Key Features
 
-- **Data Poisoning**: Runs fake searches and site visits to bury your real activity in noise
-- **Ad & Tracker Blocking**: Built-in blocking of ads, trackers, and malware domains
-- **Enhanced Privacy**: HTTPS-only mode, WebRTC protection, and more
-- **Auto-Updates**: Automatic background updates
+Vitamin is a **local-first, privacy-focused desktop browser** designed around a calm interface, explicit context boundaries, and practical browser controls.
+
+| Area | Capability |
+| --- | --- |
+| Privacy | Built-in ad and tracker blocking, optional HTTPS-only mode, WebRTC protection, fingerprinting resistance, and local per-site permission rules. |
+| Context | Local workspaces use separate persistent browser sessions, while workspace deletion clears that workspace’s local session data. |
+| Focus | Tab groups, protected pinned tabs, reader mode, a keyboard command center, and manual background-tab parking keep busy browsing sessions manageable. |
+| Recovery | **Recently closed tabs** are stored locally, remain scoped to their original workspace, and can be restored with `Ctrl/Cmd+Shift+T` or from the command center. |
+| Control | A local privacy ledger makes permission decisions visible, and standard bookmark, history, download, find-in-page, and session-restore tools remain built in. |
+| Maintenance | Automatic update support and cross-platform builds for macOS, Linux, and Windows. |
+
+> Vitamin keeps recovery metadata on the local device. It does not claim anonymous browsing, encrypted sync, or cross-device data recovery.
 
 ## Download
 
@@ -30,6 +38,18 @@ This repository contains the full source code. Vitamin Browser is free and open 
 ```bash
 npm install
 npm start
+```
+
+Run the verification suite with:
+
+```bash
+npm run test:security
+```
+
+Create a Linux package with:
+
+```bash
+npm run build:linux
 ```
 
 ## License
